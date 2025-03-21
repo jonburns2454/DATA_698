@@ -19,7 +19,7 @@ library(readxl)
 ```{r}
 # Specify the sheets and columns you want
 sheets_to_extract <- c("Select Measure Data", "Additional Measure Data")
-columns_to_extract <- c("FIPS", "State", "County", "% Fair or Poor Health", "Food Environment Index", "% Uninsured", "% Completed High School", "% Unemployed", "% Some College", "% Children in Poverty", "% Children in Single-Parent Households", "% Severe Housing Problems", "% Food Insecure", "% Limited Access to Healthy Foods", "% Uninsured Children", "% Uninsured Adults", "% Disconnected Youth", "% Enrolled in Free or Reduced Lunch", "% Households with Severe Cost Burden", "% Rural", "% Not Proficient in English")
+columns_to_extract <- c("FIPS", "State", "County", "%Fair.or.Poor.Health", "Food.Environment.Index", "Uninsured.Percent", "Completed.High.School.Percent", "Unemployed.Percent", "Some.College.Percent", "Children.in.Poverty.Percent", "Children.in.Single-Parent.Households.Percent", "Severe.Housing.Problems.Percent", "%Food.Insecure", "%Limited.Access.to.Healthy.Foods", "%Uninsured.Children", "%Uninsured.Adults", "%Disconnected.Youth", "%Enrolled.in.Free.or.Reduced.Lunch", "%Households.with.Severe.Cost.Burden", "%Rural", "%Not.Proficient.in.English", "Teen.Birth.Rate")
 
 ```
 
@@ -31,8 +31,18 @@ supp2 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/
 
 ```
 
-# Extract Data
 ```{r}
+print(names(main2024))
+main_24_sub <- main2024 %>% 
+    select(all_of(intersect(names(main2024), columns_to_extract)))
+
+```
+
+
+# Extract Data and join 2024 data together
+```{r}
+main_2024_selc <- main2024 %>% 
+    select(all_of(intersect(names(main2024), columns_to_extract)))
 
 ```
 
