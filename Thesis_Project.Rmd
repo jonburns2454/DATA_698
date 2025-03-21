@@ -26,12 +26,9 @@ columns_to_extract <- c("FIPS", "State", "County", "% Fair or Poor Health", "Foo
 ```{r message=FALSE, warning=FALSE}
 # Check column names for each sheet
 library(readxl)
-sheet1 <- read_excel("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\DATA\\2024 County Health Rankings New York Data - v2.xlsx", sheet = "Select Measure Data")
-sheet2 <- read_excel("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\DATA\\2024 County Health Rankings New York Data - v2.xlsx", sheet = "Additional Measure Data")
+main2024 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/2024_main.csv")
+supp2 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/2024_supp.csv")
 
-# View column names
-print(colnames(sheet1))
-print(colnames(sheet2))
 ```
 
 # Extract Data
