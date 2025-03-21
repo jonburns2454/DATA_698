@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```
 
-```{r message=TRUE, warning=FALSE}
+```{r message=FALSE, warning=FALSE}
 library(tidyverse)
 library(readxl)
 ```
@@ -34,6 +34,7 @@ print(colnames(sheet1))
 print(colnames(sheet2))
 ```
 
+# Extract Data
 ```{r}
 
 ```
