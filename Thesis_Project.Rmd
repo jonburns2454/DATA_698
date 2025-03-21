@@ -1,0 +1,40 @@
+---
+title: "Thesis Project"
+author: "Jonathan Burns"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r message=TRUE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+```
+
+
+```{r}
+# Specify the sheets and columns you want
+sheets_to_extract <- c("Select Measure Data", "Additional Measure Data")
+columns_to_extract <- c("FIPS", "State", "County", "% Fair or Poor Health", "Food Environment Index", "% Uninsured", "% Completed High School", "% Unemployed", "% Some College", "% Children in Poverty", "% Children in Single-Parent Households", "% Severe Housing Problems", "% Food Insecure", "% Limited Access to Healthy Foods", "% Uninsured Children", "% Uninsured Adults", "% Disconnected Youth", "% Enrolled in Free or Reduced Lunch", "% Households with Severe Cost Burden", "% Rural", "% Not Proficient in English")
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Check column names for each sheet
+library(readxl)
+sheet1 <- read_excel("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\DATA\\2024 County Health Rankings New York Data - v2.xlsx", sheet = "Select Measure Data")
+sheet2 <- read_excel("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\DATA\\2024 County Health Rankings New York Data - v2.xlsx", sheet = "Additional Measure Data")
+
+# View column names
+print(colnames(sheet1))
+print(colnames(sheet2))
+```
+
+```{r}
+
+```
+
