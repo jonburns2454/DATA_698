@@ -15,8 +15,11 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(readxl)
 library(janitor)
+library(psych)
 ```
 
+
+# Data Cleaning
 
 ```{r}
 # Specify the sheets and columns you want
@@ -26,8 +29,7 @@ columns_to_extract <- c("year","fips", "state", "county", "percent_food_insecure
 
 ```
 
-
-# Pull in data
+## Pull in data
 
 ```{r}
 main_25 <- "https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/main_25.csv"
@@ -72,9 +74,9 @@ s_20 <- clean_and_select(supp_20, columns_to_extract)
 
 ```
 
-# Fix Missing Total and join
+## Fix Missing Total and join
 ```{r}
-# Join main and supplemental datasets for each year
+
 f_25 <- m_25 %>% 
   left_join(s_25, by = c("year", "fips")) %>% 
   select(-state.y, -county.y)
@@ -105,4 +107,154 @@ final <- bind_rows(f_25, f_24, f_23, f_22, f_21, f_20)
 final_data_clean <- final %>%
   select(where(~ !any(is.na(.))))
 ```
+
+# Rural | Urban Category
+```{r}
+final <- final %>%
+  mutate(
+    rural_urban = case_when(
+      percent_rural == 100 ~ "Completely Rural",
+      percent_rural >= 50 & percent_rural < 100 ~ "Mostly Rural",
+      percent_rural < 50 ~ "Mostly Urban",
+      TRUE ~ NA_character_ 
+    )
+  )
+    
+```
+
+## Dropping NA Columns vs Imputing
+
+```{r}
+
+total_rows <- nrow(final)
+
+
+missing_counts <- colSums(is.na(final))
+
+missing_percentage <- (missing_counts / total_rows) * 100
+
+
+missing_table <- data.frame(
+  Column = names(missing_counts),
+  MissingCount = missing_counts,
+  MissingPercentage = round(missing_percentage, 2) 
+)
+
+missing_table <- missing_table[missing_table$MissingCount > 0, ]
+
+print(missing_table)
+```
+
+# EDA
+
+## Summary Statistics
+
+```{r}
+describe(final, fast = T)
+```
+
+
+
+
+## Missingness Visualized
+
+```{r}
+ggplot(missing_table, aes(x = reorder(Column, -MissingPercentage), y = MissingPercentage)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() + 
+  labs(
+    title = "Percentage of Missing Data by Column",
+    x = "Variable",
+    y = "Missingness"
+  ) +
+  theme_minimal()
+```
+
+##Numeric Distribution
+
+```{r}
+library(ggplot2)
+numeric_columns <- sapply(final, is.numeric)
+final_numeric <- final[, numeric_columns]
+
+for (col in names(final_numeric)) {
+  print(
+    ggplot(final, aes_string(x = col)) +
+      geom_histogram(fill = "steelblue", bins = 30, color = "black") +
+      labs(title = paste("Distribution of", col), x = col, y = "Frequency") +
+      theme_minimal()
+  )
+}
+```
+
+## Correlation Matrix and Heatmap:
+
+```{r}
+final_numeric <- final_numeric[, colSums(is.na(final_numeric)) < nrow(final_numeric)]
+cor_matrix <- cor(final_numeric, use = "complete.obs")
+print(cor_matrix)
+
+library(ggplot2)
+library(reshape2)
+
+cor_data <- melt(cor_matrix)
+ggplot(cor_data, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  labs(title = "Correlation Matrix", x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+## By Year:
+
+```{r}
+library(dplyr)
+
+yearly_summary <- final %>%
+  group_by(year) %>%
+  summarise(across(where(is.numeric), list(mean = mean, median = median, sd = sd), na.rm = TRUE))
+
+print(yearly_summary)
+```
+
+## By County
+```{r}
+region_summary <- final %>%
+  group_by(county.x, year) %>%
+  summarise(across(where(is.numeric), list(mean = mean, median = median, sd = sd), na.rm = TRUE))
+
+print(region_summary)
+```
+
+
+
+```{r}
+library(ggplot2)
+
+ggplot(region_summary, aes(x = year, y = percent_food_insecure_mean, color = county.x)) +
+  geom_line() +
+  labs(title = "Yearly Food Insecurity Across New York State Counties", x = "Year", y = "Food Insecurity") +
+  theme_minimal()
+```
+
+```{r}
+
+ggplot(region_summary, aes(x = year, y = percent_food_insecure_mean)) +
+  geom_line() +
+  labs(title = "Yearly Average Food Insecurity Across New York State", x = "Year", y = "Value") +
+  theme_minimal()
+```
+
+```{r}
+
+ggplot(final, aes(x = county.x, y = percent_food_insecure, color = rural_urban)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(title = "County Level Comparison of Food Insecurity In New York State", x = "County", y = "Food Insecurity Percentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
+```
+
+
 
