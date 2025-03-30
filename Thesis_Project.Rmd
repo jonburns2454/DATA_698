@@ -10,9 +10,11 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```
 
+# Packages Used : running list
 ```{r message=FALSE, warning=FALSE}
 library(tidyverse)
 library(readxl)
+library(janitor)
 ```
 
 
@@ -23,26 +25,24 @@ columns_to_extract <- c("FIPS", "State", "County", "%Fair.or.Poor.Health", "Food
 
 ```
 
+
+# Pull in data
 ```{r message=FALSE, warning=FALSE}
 # Check column names for each sheet
 library(readxl)
-main2024 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/2024_main.csv")
-supp2 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/2024_supp.csv")
-
-```
-
-```{r}
-print(names(main2024))
-main_24_sub <- main2024 %>% 
-    select(all_of(intersect(names(main2024), columns_to_extract)))
-
+main2024 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/main_2024.csv", check.names = F)
+main2024 <- clean_names(main2024)
+supp2024 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/supp_2024.csv", check.names = F)
+supp2024 <- clean_names(supp2024)
 ```
 
 
-# Extract Data and join 2024 data together
+# Removing confidence interval columns
 ```{r}
-main_2024_selc <- main2024 %>% 
-    select(all_of(intersect(names(main2024), columns_to_extract)))
+main_24_clean <- main2024 %>% 
+    select(-contains("percent_ci_low"), -contains("percent_ci_high"), -contains("national_z_score"), -contains("injury_death_rate"), -contains("ypll_rate"), -contains("percent_lbw"))
+supp_24_clean <- supp2024 %>% 
+    select(-contains("percent_ci_low"), -contains("percent_ci_high"), -contains("national_z_score"), -contains("injury_death_rate"), -contains("ypll_rate"), -contains("percent_lbw"), -contains("non_hispanic"))
 
 ```
 
