@@ -20,29 +20,36 @@ library(janitor)
 
 ```{r}
 # Specify the sheets and columns you want
-sheets_to_extract <- c("Select Measure Data", "Additional Measure Data")
-columns_to_extract <- c("FIPS", "State", "County", "%Fair.or.Poor.Health", "Food.Environment.Index", "Uninsured.Percent", "Completed.High.School.Percent", "Unemployed.Percent", "Some.College.Percent", "Children.in.Poverty.Percent", "Children.in.Single-Parent.Households.Percent", "Severe.Housing.Problems.Percent", "%Food.Insecure", "%Limited.Access.to.Healthy.Foods", "%Uninsured.Children", "%Uninsured.Adults", "%Disconnected.Youth", "%Enrolled.in.Free.or.Reduced.Lunch", "%Households.with.Severe.Cost.Burden", "%Rural", "%Not.Proficient.in.English", "Teen.Birth.Rate")
+
+columns_to_extract <- c("year","fips", "state", "county", "percent_food_insecure","percent_frequent_mental_distress",
+                        "percent_uninsured_children", "percent_disconnected_youth", "spending_per_pupil","school_funding_adequacy", "high_school_graduation_rate", "median_household_income", "gender_pay_gap", "percent_enrolled_in_free_or_reduced_lunch", "percent_household_income_required_for_child_care_expenses", "percent_households_with_severe_cost_burden", "percent_rural", "percent_65_and_over", "percent_black","percent_not_proficient_in_english", "segregation_index", "percent_disconnected_youth", "food_environment_index", "teen_birth_rate", "percent_fair_or_poor_health", "percent_unemployed", "percent_children_in_single_parent_households", "percent_children_in_poverty", "percent_severe_housing_problems", "percent_completed_high_school","percent_completed_high_school", "percent_low_birthweight")
 
 ```
 
 
 # Pull in data
-```{r message=FALSE, warning=FALSE}
-# Check column names for each sheet
-library(readxl)
-main2024 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/main_2024.csv", check.names = F)
-main2024 <- clean_names(main2024)
-supp2024 <- read.csv("https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/supp_2024.csv", check.names = F)
-supp2024 <- clean_names(supp2024)
+
+```{r}
+main_24 <- "https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/main_2024.csv"
+supp_24 <- "https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/supp_2024.csv"
 ```
 
 
-# Removing confidence interval columns
 ```{r}
-main_24_clean <- main2024 %>% 
-    select(-contains("percent_ci_low"), -contains("percent_ci_high"), -contains("national_z_score"), -contains("injury_death_rate"), -contains("ypll_rate"), -contains("percent_lbw"))
-supp_24_clean <- supp2024 %>% 
-    select(-contains("percent_ci_low"), -contains("percent_ci_high"), -contains("national_z_score"), -contains("injury_death_rate"), -contains("ypll_rate"), -contains("percent_lbw"), -contains("non_hispanic"))
+clean_and_select <- function(file_path, columns_to_extract) {
+  data <- read.csv(file_path, check.names = FALSE) %>%
+    janitor::clean_names() %>%
+    select(any_of(columns_to_extract))
+  return(data)
+}
+
+m_24 <- clean_and_select(main_24, columns_to_extract)
+s_24 <- clean_and_select(supp_24, columns_to_extract)
+
+```
+
+# Fix Missing Total and join
+```{r}
 
 ```
 
