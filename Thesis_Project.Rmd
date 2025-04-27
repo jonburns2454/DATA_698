@@ -187,25 +187,6 @@ for (col in names(final_numeric)) {
 }
 ```
 
-## Correlation Matrix and Heatmap:
-
-```{r}
-final_numeric <- final_numeric[, colSums(is.na(final_numeric)) < nrow(final_numeric)]
-cor_matrix <- cor(final_numeric, use = "complete.obs")
-print(cor_matrix)
-
-library(ggplot2)
-library(reshape2)
-
-cor_data <- melt(cor_matrix)
-ggplot(cor_data, aes(x = Var1, y = Var2, fill = value)) +
-  geom_tile() +
-  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
-  labs(title = "Correlation Matrix", x = "", y = "") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
 
 ## By Year:
 
@@ -256,5 +237,126 @@ ggplot(final, aes(x = county.x, y = percent_food_insecure, color = rural_urban))
   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
 ```
 
+```{r}
+final_csv <- write_csv(final, "C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
+```
 
+
+# Model Testing:
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(xgboost)
+library(caret)
+
+# Read the CSV
+data <- read.csv("final_data.csv")
+
+# Filter relevant columns (adjust as needed)
+df <- data %>%
+  select(
+    year, fips, county.x, percent_food_insecure,
+    percent_unemployed, percent_children_in_poverty,
+    median_household_income, percent_fair_or_poor_health,
+    high_school_graduation_rate, rural_urban
+  ) %>%
+  drop_na(percent_food_insecure)  # Remove rows with missing target
+```
+
+```{r}
+# Create lag features (food insecurity from previous year)
+df <- df %>%
+  group_by(fips) %>%
+  mutate(
+    food_insecure_lag1 = lag(percent_food_insecure, 1),  # Previous year
+    food_insecure_lag2 = lag(percent_food_insecure, 2)   # Two years back
+  ) %>%
+  ungroup()
+
+# Encode 'rural_urban' as numeric
+df <- df %>%
+  mutate(rural_urban = as.factor(rural_urban),
+         rural_urban = as.numeric(rural_urban))
+```
+
+```{r}
+train <- df %>% filter(year < 2024)
+test <- df %>% filter(year == 2024)
+
+# Separate features (X) and target (y)
+X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure))
+y_train <- train$percent_food_insecure
+
+X_test <- test %>% select(-c(year, fips, county.x, percent_food_insecure))
+y_test <- test$percent_food_insecure
+```
+
+```{r}
+# Set up cross-validation
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE
+)
+
+# Define XGBoost tuning grid
+xgb_grid <- expand.grid(
+  nrounds = 100,
+  max_depth = 6,
+  eta = 0.3,
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+# Train the model
+xgb_model <- train(
+  x = X_train,
+  y = y_train,
+  method = "xgbTree",
+  trControl = ctrl,
+  tuneGrid = xgb_grid,
+  verbosity = 0
+)
+
+# Print model summary
+print(xgb_model)
+```
+
+```{r}
+# Prepare 2024 data to predict 2025 (assuming 2025 features ≈ 2024)
+# (If 2025 features are unavailable, use 2024 as proxy)
+X_2025 <- df %>% 
+  filter(year == 2024) %>%
+  select(-c(year, fips, county.x, percent_food_insecure))
+
+# Predict 2025 food insecurity
+predictions_2025 <- predict(xgb_model, newdata = X_2025)
+
+# Combine with county names
+results <- df %>%
+  filter(year == 2024) %>%
+  select(fips, county.x) %>%
+  mutate(pred_2025_food_insecure = predictions_2025)
+
+# View predictions
+print(results)
+```
+
+```{r}
+# Predict 2024 (for validation)
+pred_2024 <- predict(xgb_model, newdata = X_test)
+
+# Calculate RMSE
+rmse <- sqrt(mean((pred_2024 - y_test)^2))
+print(paste("RMSE:", rmse))
+
+# Plot actual vs. predicted
+ggplot(data.frame(Actual = y_test, Predicted = pred_2024), aes(Actual, Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs. Predicted Food Insecurity (2024)")
+```
 
