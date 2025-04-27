@@ -244,6 +244,7 @@ final_csv <- write_csv(final, "C:\\Users\\jashb\\OneDrive\\Documents\\Masters Da
 
 # Model Testing:
 
+## XGBoost 1:
 ```{r}
 # Load libraries
 library(tidyverse)
@@ -251,7 +252,7 @@ library(xgboost)
 library(caret)
 
 # Read the CSV
-data <- read.csv("final_data.csv")
+data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 
 # Filter relevant columns (adjust as needed)
 df <- data %>%
@@ -267,6 +268,7 @@ df <- data %>%
 ```{r}
 # Create lag features (food insecurity from previous year)
 df <- df %>%
+  arrange(fips, year) %>% 
   group_by(fips) %>%
   mutate(
     food_insecure_lag1 = lag(percent_food_insecure, 1),  # Previous year
@@ -358,5 +360,341 @@ ggplot(data.frame(Actual = y_test, Predicted = pred_2024), aes(Actual, Predicted
   geom_point() +
   geom_abline(slope = 1, intercept = 0, color = "red") +
   labs(title = "Actual vs. Predicted Food Insecurity (2024)")
+```
+
+## XGBoost 2:
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(xgboost)
+library(caret)
+
+# Read the CSV
+data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
+
+# Filter relevant columns (adjust as needed)
+df <- data %>%
+  select(where(~ all(!is.na(.)))) %>%
+  drop_na(percent_food_insecure)  # Remove rows with missing target
+```
+
+```{r}
+# Create lag features (food insecurity from previous year)
+df <- df %>%
+  arrange(fips, year) %>% 
+  group_by(fips) %>%
+  mutate(
+    food_insecure_lag1 = lag(percent_food_insecure, 1),  # Previous year
+    food_insecure_lag2 = lag(percent_food_insecure, 2)   # Two years back
+  ) %>%
+  ungroup()
+
+# Encode 'rural_urban' as numeric
+df <- df %>%
+  mutate(rural_urban = as.factor(rural_urban),
+         rural_urban = as.numeric(rural_urban))
+```
+
+```{r}
+train <- df %>% filter(year < 2024)
+test <- df %>% filter(year == 2024)
+
+# Separate features (X) and target (y)
+X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure, state.x))
+y_train <- train$percent_food_insecure
+
+X_test <- test %>% select(-c(year, fips, county.x, percent_food_insecure, state.x))
+y_test <- test$percent_food_insecure
+```
+
+```{r warning=FALSE}
+# Faster XGBoost Tuning ---------------------------------------------------
+# Reduced tuning grid with most impactful parameters
+ctrl_fast <- trainControl(
+  method = "cv",
+  number = 5,  # Reduced from 10 folds
+  verboseIter = TRUE,
+  allowParallel = TRUE  # Enable parallel processing
+)
+
+# Focused tuning grid
+xgb_grid_fast <- expand.grid(
+  nrounds = c(100, 150, 200, 300),          # Reduced options
+  max_depth = c(4, 6, 8),            # Most useful range
+  eta = c(0.05, 0.1, .15),            # Optimal learning rates
+  gamma = 0,                     # Fixed for simplicity
+  colsample_bytree = 0.8,        # Fixed subsampling
+  min_child_weight = 1,          # Fixed
+  subsample = 0.8                # Fixed
+)
+
+# Train with parallel processing
+library(doParallel)
+cl <- makePSOCKcluster(4)  # Use 4 cores
+registerDoParallel(cl)
+
+xgb_fast <- train(
+  x = X_train,
+  y = y_train,
+  method = "xgbTree",
+  trControl = ctrl_fast,
+  tuneGrid = xgb_grid_fast,
+  verbosity = 0,                 # Suppress warnings
+  metric = "RMSE"
+)
+
+stopCluster(cl)
+
+# View results
+print(xgb_fast)
+plot(xgb_fast)
+```
+
+
+```{r}
+# Faster XGBoost Tuning ---------------------------------------------------
+# Set up parallel processing
+library(doParallel)
+cl <- makePSOCKcluster(4)  # Use 4 cores
+registerDoParallel(cl)
+
+# Reduced tuning grid with most impactful parameters
+ctrl_fast <- trainControl(
+  method = "cv",
+  number = 5,  # Reduced from 10 folds
+  verboseIter = TRUE,
+  allowParallel = TRUE,  # Enable parallel processing
+  savePredictions = "final"
+)
+
+# Focused tuning grid
+xgb_grid_fast <- expand.grid(
+  nrounds = c(100, 150, 200, 300),
+  max_depth = c(4, 6, 8),
+  eta = c(0.05, 0.1, 0.15),
+  gamma = 0,
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 0.8
+)
+
+# Train the optimized model
+xgb_optimized <- train(
+  x = X_train,
+  y = y_train,
+  method = "xgbTree",
+  trControl = ctrl_fast,
+  tuneGrid = xgb_grid_fast,
+  verbosity = 0,
+  metric = "RMSE"
+)
+
+stopCluster(cl)
+
+# View tuning results
+print(xgb_optimized)
+plot(xgb_optimized)
+
+# Get best model parameters
+best_params <- xgb_optimized$bestTune
+
+# Prepare 2025 prediction data with feature engineering
+X_2025 <- df %>% 
+  filter(year == 2024) %>%
+  select(-c(year, fips, county.x, percent_food_insecure)) %>%
+  # Add any feature engineering used in training
+  mutate(
+    rural_urban = as.numeric(factor(rural_urban))
+  )
+
+# Make predictions using the optimized model
+predictions_2025 <- predict(xgb_optimized, newdata = X_2025)
+
+# Create comprehensive results dataframe
+results_2025 <- df %>%
+  filter(year == 2024) %>%
+  select(fips, county.x, percent_food_insecure) %>%  # Include current food insecurity
+  mutate(
+    pred_2025_food_insecure = predictions_2025,
+    predicted_change = pred_2025_food_insecure - percent_food_insecure,
+    risk_category = case_when(
+      pred_2025_food_insecure > quantile(predictions_2025, 0.75) ~ "High Risk",
+      pred_2025_food_insecure > quantile(predictions_2025, 0.5) ~ "Medium Risk",
+      TRUE ~ "Low Risk"
+    )
+  ) %>%
+  arrange(desc(pred_2025_food_insecure))  # Sort by highest predicted food insecurity
+
+# Save results with timestamps
+write.csv(
+  results_2025,
+  file = paste0("food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
+  row.names = FALSE
+)
+
+# Visualize top 10 high-risk counties
+library(ggplot2)
+results_2025 %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(county.x, -pred_2025_food_insecure), y = pred_2025_food_insecure)) +
+  geom_col(fill = "firebrick") +
+  labs(title = "Top 10 High-Risk Counties for 2025 Food Insecurity",
+       x = "County",
+       y = "Predicted Food Insecurity Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## LSTM 1:
+
+```{r}
+library(keras)
+library(tensorflow)
+library(tidyverse)
+library(caret)
+
+# Data Preparation --------------------------------------------------------
+# Convert data to 3D array format for LSTM [samples, timesteps, features]
+create_lstm_data <- function(data, lookback = 3) {
+  n <- nrow(data)
+  X <- array(dim = c(n - lookback, lookback, ncol(data)))
+  y <- vector(length = n - lookback)
+  
+  for (i in 1:(n - lookback)) {
+    X[i,,] <- as.matrix(data[i:(i + lookback - 1), ])
+    y[i] <- data[i + lookback, "percent_food_insecure"]
+  }
+  return(list(X = X, y = y))
+}
+
+# Normalize data
+preprocess_data <- function(data) {
+  preproc <- preProcess(data, method = c("center", "scale"))
+  list(
+    data = predict(preproc, data),
+    preproc = preproc
+  )
+}
+
+# Prepare data by county
+county_data <- df %>%
+  group_by(fips) %>%
+  arrange(year) %>%
+  select(-c(county.x, year)) %>%
+  nest()
+
+# Apply preprocessing and create LSTM sequences
+prepped_data <- county_data %>%
+  mutate(
+    preprocessed = map(data, ~preprocess_data(select(., -fips))),
+    lstm_ready = map(preprocessed, ~create_lstm_data(.$data, lookback = 3))
+  )
+
+# Combine all counties' data
+X_all <- do.call(abind, c(lapply(prepped_data$lstm_ready, function(x) x$X), along = 1))
+y_all <- unlist(lapply(prepped_data$lstm_ready, function(x) x$y))
+
+# Train-test split (time-based)
+train_idx <- 1:floor(0.8 * nrow(X_all))
+X_train <- X_all[train_idx,,]
+y_train <- y_all[train_idx]
+X_test <- X_all[-train_idx,,]
+y_test <- y_all[-train_idx]
+
+# LSTM Model --------------------------------------------------------------
+build_lstm_model <- function(input_shape) {
+  model <- keras_model_sequential() %>%
+    layer_lstm(units = 64, input_shape = input_shape, return_sequences = TRUE) %>%
+    layer_dropout(rate = 0.2) %>%
+    layer_lstm(units = 32, return_sequences = FALSE) %>%
+    layer_dropout(rate = 0.2) %>%
+    layer_dense(units = 1)
+  
+  model %>% compile(
+    loss = "mse",
+    optimizer = optimizer_adam(learning_rate = 0.001),
+    metrics = c("mae")
+  )
+  
+  return(model)
+}
+
+# Build and train model
+lstm_model <- build_lstm_model(dim(X_train)[2:3])
+
+history <- lstm_model %>% fit(
+  X_train, y_train,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2,
+  callbacks = list(
+    callback_early_stopping(patience = 10),
+    callback_reduce_lr_on_plateau(factor = 0.5, patience = 5)
+  ),
+  verbose = 1
+)
+
+# Evaluate model
+lstm_model %>% evaluate(X_test, y_test)
+
+# Predictions -------------------------------------------------------------
+# Function to predict next year's values
+predict_next_year <- function(model, last_data, preproc) {
+  last_scaled <- predict(preproc, last_data)
+  input_data <- array_reshape(as.matrix(last_scaled), c(1, dim(last_scaled)[1], dim(last_scaled)[2]))
+  pred_scaled <- model %>% predict(input_data)
+  pred <- pred_scaled * preproc$std["percent_food_insecure"] + preproc$mean["percent_food_insecure"]
+  return(pred)
+}
+
+# Predict 2025 values for each county
+predictions_2025 <- prepped_data %>%
+  mutate(
+    last_3_years = map(data, ~tail(., 3)),
+    prediction = map2_dbl(
+      last_3_years,
+      preprocessed,
+      ~predict_next_year(lstm_model, select(.x, -fips), .y$preproc)
+    )
+  ) %>%
+  select(fips, prediction)
+
+# Create results dataframe
+results_2025 <- df %>%
+  filter(year == 2024) %>%
+  select(fips, county.x, percent_food_insecure) %>%
+  left_join(predictions_2025, by = "fips") %>%
+  rename(
+    current_food_insecure = percent_food_insecure,
+    pred_2025_food_insecure = prediction
+  ) %>%
+  mutate(
+    predicted_change = pred_2025_food_insecure - current_food_insecure,
+    risk_category = case_when(
+      pred_2025_food_insecure > quantile(pred_2025_food_insecure, 0.75, na.rm = TRUE) ~ "High Risk",
+      pred_2025_food_insecure > quantile(pred_2025_food_insecure, 0.5, na.rm = TRUE) ~ "Medium Risk",
+      TRUE ~ "Low Risk"
+    )
+  ) %>%
+  arrange(desc(pred_2025_food_insecure))
+
+# Save results
+write.csv(
+  results_2025,
+  file = paste0("lstm_food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
+  row.names = FALSE
+)
+
+# Visualization
+results_2025 %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(county.x, -pred_2025_food_insecure), y = pred_2025_food_insecure)) +
+  geom_col(fill = "darkblue") +
+  labs(title = "Top 10 High-Risk Counties for 2025 Food Insecurity (LSTM)",
+       x = "County",
+       y = "Predicted Food Insecurity Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
