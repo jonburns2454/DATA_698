@@ -548,252 +548,274 @@ results_2025 %>%
 
 ## Neural Network 1:
 
-```{r}
-# Load required libraries
-library(tidyverse)
+
+### Data Prep:
+```{r message=FALSE, warning=FALSE}
 library(keras)
 library(tensorflow)
 library(caret)
-library(recipes)
+library(tidyverse)
+library(tidyr)
+library(abind)
 
-# Set random seed for reproducibility
-set.seed(42)
-tensorflow::set_random_seed(42)
-
-# Read and prepare data (same as your XGBoost code)
+# Read and preprocess data
 data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 
+# Filter relevant columns and remove rows with missing target
 df <- data %>%
-  select(
-    year, fips, county.x, percent_food_insecure,
-    percent_unemployed, percent_children_in_poverty,
-    median_household_income, percent_fair_or_poor_health,
-    high_school_graduation_rate, rural_urban
-  ) %>%
-  drop_na(percent_food_insecure)
+  select(-starts_with("percent_children_in_single_parent_households")) %>% # Remove duplicate columns
+  select(-county.x, -state.x) %>% # Remove redundant identifiers
+  drop_na(percent_food_insecure) # Remove rows with missing target
 
-# Create lag features
+# Convert rural_urban to numeric
 df <- df %>%
-  arrange(fips, year) %>% 
-  group_by(fips) %>%
-  mutate(
-    food_insecure_lag1 = lag(percent_food_insecure, 1),
-    food_insecure_lag2 = lag(percent_food_insecure, 2)
-  ) %>%
-  ungroup() %>%
   mutate(rural_urban = as.numeric(as.factor(rural_urban)))
 
-# Split data
-train <- df %>% filter(year < 2024)
-test <- df %>% filter(year == 2024)
+# Handle remaining NAs - impute with median
+df <- df %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
 
-# Prepare features and target
-X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure))
-y_train <- train$percent_food_insecure
+# Normalize the data
+preProc <- preProcess(df %>% select(-year, -fips, -percent_food_insecure), 
+                    method = c("center", "scale"))
 
-X_test <- test %>% select(-c(year, fips, county.x, percent_food_insecure))
-y_test <- test$percent_food_insecure
+df_normalized <- predict(preProc, df) %>%
+  mutate(percent_food_insecure = df$percent_food_insecure) # Keep target unnormalized
+```
 
-# Preprocessing with recipes (similar to XGBoost's handling of numeric features)
-preprocessor <- recipe(~ ., data = X_train) %>%
-  step_normalize(all_numeric_predictors()) %>%
-  prep()
+### Time Series Sequence Creation
 
-X_train_processed <- bake(preprocessor, new_data = X_train)
-X_test_processed <- bake(preprocessor, new_data = X_test)
-
-# Convert to matrix format for Keras
-X_train_matrix <- as.matrix(X_train_processed)
-X_test_matrix <- as.matrix(X_test_processed)
-
-build_nn_model <- function(input_shape) {
-  model <- keras_model_sequential() %>%
-    # Input layer
-    layer_dense(units = 64, activation = "relu", input_shape = input_shape) %>%
-    layer_batch_normalization() %>%
-    layer_dropout(rate = 0.2) %>%
-    
-    # Hidden layers
-    layer_dense(units = 64, activation = "relu") %>%
-    layer_batch_normalization() %>%
-    layer_dropout(rate = 0.2) %>%
-    
-    layer_dense(units = 64, activation = "relu") %>%
-    layer_batch_normalization() %>%
-    layer_dropout(rate = 0.2) %>%
-    
-    # Output layer
-    layer_dense(units = 1, activation = "linear")
-  
-  # Compile model
-  model %>% compile(
-    loss = "mse",
-    optimizer = optimizer_adam(learning_rate = 0.01),
-    metrics = c("mae")
-  )
-  
-  return(model)
+```{r}
+# Create sequences for LSTM
+create_sequences <- function(data, n_timesteps) {
+  data %>%
+    arrange(fips, year) %>%
+    group_by(fips) %>%
+    mutate(seq_id = (row_number() - 1) %/% n_timesteps) %>%
+    filter(n() >= n_timesteps) %>% # Only keep counties with enough data
+    group_by(fips, seq_id) %>%
+    filter(n() == n_timesteps) %>% # Only complete sequences
+    ungroup() %>%
+    select(-seq_id)
 }
 
-# Create and train model - corrected workflow
-model <- build_nn_model(input_shape = ncol(X_train_matrix))
+n_timesteps <- 3 # Use 3 years to predict next year
+seq_data <- create_sequences(df_normalized, n_timesteps)
 
-# Early stopping callback
-early_stopping <- callback_early_stopping(
-  monitor = "val_loss",
-  patience = 10,
-  restore_best_weights = TRUE
-)
+# Split into train (2020-2024) and test (2025)
+train <- seq_data %>% filter(year < 2025)
+test <- seq_data %>% filter(year == 2025)
 
-# Train model
-history <- model %>% fit(
-  x = X_train_matrix,
-  y = y_train,
-  epochs = 200,
-  batch_size = 32,
-  validation_split = 0.2,
-  callbacks = list(early_stopping),
-  verbose = 1
-)
+# Modified data preparation that keeps fips for grouping
+prepare_X_y <- function(data) {
+  data %>%
+    group_by(fips) %>%
+    arrange(year) %>%
+    mutate(next_year_food_insecure = lead(percent_food_insecure)) %>%
+    filter(!is.na(next_year_food_insecure)) %>% # Remove last year of each county
+    ungroup() # Don't drop fips here
+}
 
-# Plot training history
-plot(history)
+train_xy <- prepare_X_y(train) %>% select(-year)
+test_xy <- prepare_X_y(test) %>% select(-year)
 
-# Evaluate on test set
-test_performance <- model %>% evaluate(X_test_matrix, y_test)
-print(paste("Test MSE:", test_performance[1]))
-print(paste("Test MAE:", test_performance[2]))
+# Separate features and target while keeping fips for grouping
+X_train <- train_xy %>% select(-next_year_food_insecure)
+y_train <- train_xy %>% select(fips, next_year_food_insecure)
 
-# Predict 2025 values
-X_2025 <- df %>% 
-  filter(year == 2024) %>%
-  select(-c(year, fips, county.x, percent_food_insecure))
+X_test <- test_xy %>% select(-next_year_food_insecure)
+y_test <- test_xy %>% select(fips, next_year_food_insecure)
 
-X_2025_processed <- bake(preprocessor, new_data = X_2025)
-X_2025_matrix <- as.matrix(X_2025_processed)
+reshape_for_lstm <- function(X, n_timesteps) {
+  # First ensure data is properly grouped and ordered
+  X <- X %>% 
+    group_by(fips) %>% 
+    arrange(year) %>% 
+    ungroup()
+  
+  # Calculate number of features (excluding group columns)
+  feature_cols <- setdiff(colnames(X), c("fips", "year"))
+  n_features <- length(feature_cols)
+  
+  # Get unique counties and count sequences per county
+  counties <- unique(X$fips)
+  n_counties <- length(counties)
+  
+  # Initialize array with correct dimensions
+  array_data <- array(dim = c(n_counties, n_timesteps, n_features))
+  
+  # Fill the array
+  for (i in 1:n_counties) {
+    county_df <- X %>% 
+      filter(fips == counties[i]) %>% 
+      select(all_of(feature_cols)) %>% 
+      as.matrix()
+    
+    # Ensure we have exactly n_timesteps observations
+    if (nrow(county_df) >= n_timesteps) {
+      array_data[i,,] <- county_df[1:n_timesteps,]
+    } else {
+      # Handle counties with insufficient data by padding with NA
+      county_df <- rbind(county_df, 
+                        matrix(NA, n_timesteps - nrow(county_df), ncol(county_df)))
+      array_data[i,,] <- county_df
+    }
+  }
+  
+  return(array_data)
+}
 
-predictions_2025 <- model %>% predict(X_2025_matrix)
+# Then apply it:
+X_train_array <- reshape_for_lstm(train, n_timesteps)  # Use original train data with fips and year
+X_test_array <- reshape_for_lstm(test, n_timesteps)    # Use original test data with fips and year
 
-# Prepare results (same format as XGBoost output)
-results_nn <- df %>%
-  filter(year == 2024) %>%
-  select(fips, county.x) %>%
-  mutate(pred_2025_food_insecure = predictions_2025[,1])
+# Verify the shapes
+dim(X_train_array)  # Should be [n_counties, n_timesteps, n_features]
+dim(X_test_array)   # Should be [n_counties, n_timesteps, n_features]
 
-# Compare with actual 2024 values for validation
-results_nn <- results_nn %>%
-  left_join(test %>% select(fips, actual_2024 = percent_food_insecure), by = "fips")
+# Get target values (value after each sequence)
+get_targets <- function(data, n_timesteps) {
+  data %>%
+    group_by(fips) %>%
+    arrange(year) %>%
+    mutate(seq_num = (row_number() - 1) %/% n_timesteps) %>%
+    group_by(fips, seq_num) %>%
+    filter(n() == n_timesteps) %>%  # Only complete sequences
+    summarise(target = last(percent_food_insecure)) %>%
+    pull(target)
+}
 
-# Calculate RMSE (to match XGBoost metric)
-rmse_nn <- sqrt(mean((results_nn$pred_2025_food_insecure - results_nn$actual_2024)^2))
-print(paste("Neural Network RMSE:", rmse_nn))
+y_train_array <- get_targets(train, n_timesteps)
+y_test_array <- get_targets(test, n_timesteps)
 
-# Plot actual vs predicted
-ggplot(results_nn, aes(x = actual_2024, y = pred_2025_food_insecure)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(title = "Neural Network: Actual vs Predicted Food Insecurity",
-       x = "Actual 2024 Values",
-       y = "Predicted 2025 Values")
+```
+
+### LSTM Model:
+
+```{r}
+cat("X_train_array dimensions:", paste(dim(X_train_array), "\n"))
+# Should output: [num_samples, timesteps, features] e.g., "100 3 20"
 ```
 
 ```{r}
-# Load required libraries
-library(tidyverse)
 library(keras)
-library(tensorflow)
-library(caret)
-library(recipes)
 
-# Verify installation
-tensorflow::tf_config()
-keras::is_keras_available()
+# 1. First completely reset the environment
+k_clear_session()
 
-# Set random seeds for reproducibility
-set.seed(42)
-tensorflow::set_random_seed(42)
-tf$compat$v1$set_random_seed(42)
 
-# Build neural network model - revised version
-build_nn_model <- function(input_shape) {
-  model <- keras_model_sequential(name = "xgboost_style_nn") %>%
-    # Input layer
-    layer_dense(units = 64, activation = "relu", input_shape = input_shape, 
-               kernel_regularizer = regularizer_l1_l2(l1 = 0.01, l2 = 0.01)) %>%
-    layer_batch_normalization() %>%
-    layer_dropout(rate = 0.2) %>%
-    
-    # Hidden layers with residual-like connections
-    layer_dense(units = 64, activation = "relu",
-               kernel_regularizer = regularizer_l1_l2(l1 = 0.01, l2 = 0.01)) %>%
-    layer_batch_normalization() %>%
-    layer_dropout(rate = 0.2) %>%
-    
-    # Output layer
-    layer_dense(units = 1, activation = "linear")
-  
-  # Custom optimizer configuration
-  optimizer <- optimizer_adam(
-    learning_rate = 0.01,
-    beta_1 = 0.9,
-    beta_2 = 0.999,
-    epsilon = 1e-07
-  )
-  
-  # Compile model
-  model %>% compile(
-    loss = "mse",
-    optimizer = optimizer,
-    metrics = c("mae", "mse")
-  )
-  
-  return(model)
-}
+# 2. Rebuild your model (Functional API)
+inputs <- layer_input(shape = c(3, 26))  # 3 timesteps, 26 features
+outputs <- inputs %>%
+  layer_lstm(64, return_sequences = TRUE) %>%
+  layer_dropout(0.2) %>%
+  layer_lstm(32) %>%
+  layer_dropout(0.2) %>%
+  layer_dense(16, activation = "relu") %>%
+  layer_dense(1)
+model <- keras_model(inputs, outputs)
 
-# Create model
-model <- build_nn_model(input_shape = ncol(X_train_matrix))
-
-# Print model summary
-summary(model)
-
-# Configure callbacks
-callbacks <- list(
-  callback_early_stopping(
-    monitor = "val_loss",
-    patience = 10,
-    restore_best_weights = TRUE
-  ),
-  callback_reduce_lr_on_plateau(
-    monitor = "val_loss",
-    factor = 0.1,
-    patience = 5
-  )
+keras::compile(
+  object = model,
+  optimizer = keras::optimizer_adam(lr = 0.001),
+  loss = "mse",
+  metrics = "mae"
 )
 
-# Train model with proper data conversion
-history <- model %>% fit(
-  x = array(X_train_matrix, dim = dim(X_train_matrix)),
-  y = array(y_train, dim = length(y_train)),
-  epochs = 200,
-  batch_size = 32,
-  validation_split = 0.2,
-  callbacks = callbacks,
-  verbose = 1
+history <- keras::fit(
+  object = model,
+  x = X_train_array,
+  y = y_train_array,
+  batch_size = 16,
+  epochs = 50,
+  validation_split = 0.2
 )
 
-# Plot training history
+# 5. Verify
+print(summary(model))
 plot(history)
-
-# Evaluate model
-evaluation <- model %>% evaluate(
-  x = array(X_test_matrix, dim = dim(X_test_matrix)),
-  y = array(y_test, dim = length(y_test))
-)
-
-print(paste("Test MSE:", evaluation["mse"]))
-print(paste("Test MAE:", evaluation["mae"]))
 ```
 
 
 
+### API Option: 
+```{r}
+# Clear session
+k_clear_session()
+
+# Define input shape explicitly
+inputs <- layer_input(shape = c(3, 26))  # timesteps × features
+
+# Network architecture
+outputs <- inputs %>%
+  layer_lstm(64, return_sequences = TRUE) %>%
+  layer_dropout(0.2) %>%
+  layer_lstm(32) %>%
+  layer_dropout(0.2) %>%
+  layer_dense(16, activation = "relu") %>%
+  layer_dense(1)
+
+# Create model
+
+model <- keras_model(inputs, outputs, name = "food_insecurity_model")
+# Check architecture
+summary(model)
+```
+
+### Train the Model:
+
+```{r}
+# 3. COMPILE using the CORRECT syntax
+model %>% keras::compile(
+  optimizer = keras::optimizer_adam(learning_rate = 0.001),
+  loss = "mse",
+  metrics = "mae"
+)
+
+# 4. TRAIN the model
+history <- model %>% keras::fit(
+  x = X_train_array,
+  y = y_train_array,
+  batch_size = 16,
+  epochs = 50,
+  validation_split = 0.2,
+  verbose = 1
+)
+
+# 5. Verify
+print(summary(model))
+plot(history)
+```
+
+### Evaluate Model Performance and Show Predictions:
+
+```{r}
+# Evaluate on test set
+model %>% evaluate(X_test_array, y_test_array)
+
+# Make predictions
+predictions <- model %>% predict(X_test_array)
+
+# Create comparison dataframe
+results <- data.frame(
+  Actual = y_test_array,
+  Predicted = predictions[,1],
+  County = test %>% 
+    group_by(fips) %>% 
+    slice(1) %>% 
+    pull(fips) # Get county IDs
+)
+
+# Calculate RMSE and MAE
+postResample(predictions, y_test_array)
+
+# Plot actual vs predicted
+ggplot(results, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs Predicted Food Insecurity",
+       x = "Actual Percent Food Insecure",
+       y = "Predicted Percent Food Insecure") +
+  theme_minimal()
+```
 
