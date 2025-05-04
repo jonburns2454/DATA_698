@@ -820,7 +820,6 @@ print(metrics_table)
 # 3. Use this SAFE approach that avoids CRS transformations:
 library(sf)
 library(tigris)
-library(ggplot2)
 
 # Get counties in native projection (no transformation)
 ny_counties <- counties(state = "NY", cb = TRUE, year = 2021, class = "sf") %>% 
