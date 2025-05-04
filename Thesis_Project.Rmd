@@ -456,6 +456,7 @@ plot(xgb_fast)
 # Faster XGBoost Tuning ---------------------------------------------------
 # Set up parallel processing
 library(doParallel)
+library(Metrics)
 cl <- makePSOCKcluster(4)  # Use 4 cores
 registerDoParallel(cl)
 
@@ -546,276 +547,275 @@ results_2025 %>%
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-## Neural Network 1:
+```{r}
 
-
-### Data Prep:
-```{r message=FALSE, warning=FALSE}
-library(keras)
-library(tensorflow)
 library(caret)
-library(tidyverse)
-library(tidyr)
-library(abind)
+library(Metrics)
 
-# Read and preprocess data
+test_predictions <- predict(xgb_optimized, newdata = X_test)
+actual_values <- y_test 
+
+metrics_table <- data.frame(
+  RMSE = RMSE(test_predictions, actual_values),
+  MAPE = mape(actual_values, test_predictions) * 100,
+  MSE = mean((test_predictions - actual_values)^2),
+  R2 = R2(test_predictions, actual_values)
+)
+
+print(metrics_table)
+```
+
+## XGBoost 3:
+
+This XGBoost model will attempt to do four things. Make sure the lag variables are actually backward-looking by adjusting how they are set. Address overfitting by increasing regularization and increase early stopping. Lastly, add in more interaction terms
+
+```{r}
+library(tidyverse)
+library(mice)  # For advanced imputation
+
+# Load data
 data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 
-# Filter relevant columns and remove rows with missing target
-df <- data %>%
-  select(-starts_with("percent_children_in_single_parent_households")) %>% # Remove duplicate columns
-  select(-county.x, -state.x) %>% # Remove redundant identifiers
-  drop_na(percent_food_insecure) # Remove rows with missing target
+# 1. Calculate missingness percentages
+missing_pct <- sapply(data, function(x) mean(is.na(x)) * 100)
 
-# Convert rural_urban to numeric
+# 2. Identify columns to impute (≤25% missing) vs. drop (>25%)
+cols_to_impute <- names(missing_pct[missing_pct <= 25 & missing_pct > 0])
+cols_to_drop <- names(missing_pct[missing_pct > 25])
+
+# 3. Drop columns with >25% missingness
+data_clean <- data %>% 
+  select(-all_of(cols_to_drop))
+
+# 4. Impute remaining missing values (≤25%)
+# For numeric columns: median imputation
+num_cols <- data_clean %>% 
+  select(where(is.numeric)) %>% 
+  names() %>% 
+  intersect(cols_to_impute)
+
+data_clean <- data_clean %>%
+  mutate(across(all_of(num_cols), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+# For categorical columns: mode imputation
+cat_cols <- data_clean %>% 
+  select(where(is.character) | where(is.factor)) %>% 
+  names() %>% 
+  intersect(cols_to_impute)
+
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+data_clean <- data_clean %>%
+  mutate(across(all_of(cat_cols), ~ifelse(is.na(.), get_mode(.), .)))
+
+# 5. Drop rows with >25% missingness in remaining columns
+row_missing_pct <- apply(data_clean, 1, function(x) mean(is.na(x)) * 100)
+data_final <- data_clean[row_missing_pct <= 25, ]
+
+```
+
+```{r}
+# Create lag features (food insecurity from previous year)
+df <- data_final %>%
+  arrange(fips, year) %>% 
+  group_by(fips) %>%
+  mutate(
+    food_insecure_lag1 = lag(percent_food_insecure, 1),  # Previous year
+    food_insecure_lag2 = lag(percent_food_insecure, 2)   # Two years back
+  ) %>%
+  ungroup()
+
+# Encode 'rural_urban' as numeric
 df <- df %>%
-  mutate(rural_urban = as.numeric(as.factor(rural_urban)))
-
-# Handle remaining NAs - impute with median
-df <- df %>%
-  mutate(across(where(is.numeric), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
-
-# Normalize the data
-preProc <- preProcess(df %>% select(-year, -fips, -percent_food_insecure), 
-                    method = c("center", "scale"))
-
-df_normalized <- predict(preProc, df) %>%
-  mutate(percent_food_insecure = df$percent_food_insecure) # Keep target unnormalized
-```
-
-### Time Series Sequence Creation
-
-```{r}
-# Create sequences for LSTM
-create_sequences <- function(data, n_timesteps) {
-  data %>%
-    arrange(fips, year) %>%
-    group_by(fips) %>%
-    mutate(seq_id = (row_number() - 1) %/% n_timesteps) %>%
-    filter(n() >= n_timesteps) %>% # Only keep counties with enough data
-    group_by(fips, seq_id) %>%
-    filter(n() == n_timesteps) %>% # Only complete sequences
-    ungroup() %>%
-    select(-seq_id)
-}
-
-n_timesteps <- 3 # Use 3 years to predict next year
-seq_data <- create_sequences(df_normalized, n_timesteps)
-
-# Split into train (2020-2024) and test (2025)
-train <- seq_data %>% filter(year < 2025)
-test <- seq_data %>% filter(year == 2025)
-
-# Modified data preparation that keeps fips for grouping
-prepare_X_y <- function(data) {
-  data %>%
-    group_by(fips) %>%
-    arrange(year) %>%
-    mutate(next_year_food_insecure = lead(percent_food_insecure)) %>%
-    filter(!is.na(next_year_food_insecure)) %>% # Remove last year of each county
-    ungroup() # Don't drop fips here
-}
-
-train_xy <- prepare_X_y(train) %>% select(-year)
-test_xy <- prepare_X_y(test) %>% select(-year)
-
-# Separate features and target while keeping fips for grouping
-X_train <- train_xy %>% select(-next_year_food_insecure)
-y_train <- train_xy %>% select(fips, next_year_food_insecure)
-
-X_test <- test_xy %>% select(-next_year_food_insecure)
-y_test <- test_xy %>% select(fips, next_year_food_insecure)
-
-reshape_for_lstm <- function(X, n_timesteps) {
-  # First ensure data is properly grouped and ordered
-  X <- X %>% 
-    group_by(fips) %>% 
-    arrange(year) %>% 
-    ungroup()
-  
-  # Calculate number of features (excluding group columns)
-  feature_cols <- setdiff(colnames(X), c("fips", "year"))
-  n_features <- length(feature_cols)
-  
-  # Get unique counties and count sequences per county
-  counties <- unique(X$fips)
-  n_counties <- length(counties)
-  
-  # Initialize array with correct dimensions
-  array_data <- array(dim = c(n_counties, n_timesteps, n_features))
-  
-  # Fill the array
-  for (i in 1:n_counties) {
-    county_df <- X %>% 
-      filter(fips == counties[i]) %>% 
-      select(all_of(feature_cols)) %>% 
-      as.matrix()
-    
-    # Ensure we have exactly n_timesteps observations
-    if (nrow(county_df) >= n_timesteps) {
-      array_data[i,,] <- county_df[1:n_timesteps,]
-    } else {
-      # Handle counties with insufficient data by padding with NA
-      county_df <- rbind(county_df, 
-                        matrix(NA, n_timesteps - nrow(county_df), ncol(county_df)))
-      array_data[i,,] <- county_df
-    }
-  }
-  
-  return(array_data)
-}
-
-# Then apply it:
-X_train_array <- reshape_for_lstm(train, n_timesteps)  # Use original train data with fips and year
-X_test_array <- reshape_for_lstm(test, n_timesteps)    # Use original test data with fips and year
-
-# Verify the shapes
-dim(X_train_array)  # Should be [n_counties, n_timesteps, n_features]
-dim(X_test_array)   # Should be [n_counties, n_timesteps, n_features]
-
-# Get target values (value after each sequence)
-get_targets <- function(data, n_timesteps) {
-  data %>%
-    group_by(fips) %>%
-    arrange(year) %>%
-    mutate(seq_num = (row_number() - 1) %/% n_timesteps) %>%
-    group_by(fips, seq_num) %>%
-    filter(n() == n_timesteps) %>%  # Only complete sequences
-    summarise(target = last(percent_food_insecure)) %>%
-    pull(target)
-}
-
-y_train_array <- get_targets(train, n_timesteps)
-y_test_array <- get_targets(test, n_timesteps)
-
-```
-
-### LSTM Model:
-
-```{r}
-cat("X_train_array dimensions:", paste(dim(X_train_array), "\n"))
-# Should output: [num_samples, timesteps, features] e.g., "100 3 20"
+  mutate(rural_urban = as.factor(rural_urban),
+         rural_urban = as.numeric(rural_urban),
+         food_risk_score = (
+      (percent_food_insecure * 0.4) + 
+      (percent_enrolled_in_free_or_reduced_lunch * 0.3) + 
+      (1 - food_environment_index * 0.3)
+    ),
+    economic_stress = (
+      percent_unemployed + 
+      percent_children_in_poverty + 
+      percent_severe_housing_problems
+    ) / 3)
 ```
 
 ```{r}
-library(keras)
+train <- df %>% filter(year < 2024)
+test <- df %>% filter(year == 2024)
 
-# 1. First completely reset the environment
-k_clear_session()
+# Separate features (X) and target (y)
+X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure, state.x))
+y_train <- train$percent_food_insecure
 
+X_test <- test %>% select(-c(year, fips, county.x, percent_food_insecure, state.x))
+y_test <- test$percent_food_insecure
+```
 
-# 2. Rebuild your model (Functional API)
-inputs <- layer_input(shape = c(3, 26))  # 3 timesteps, 26 features
-outputs <- inputs %>%
-  layer_lstm(64, return_sequences = TRUE) %>%
-  layer_dropout(0.2) %>%
-  layer_lstm(32) %>%
-  layer_dropout(0.2) %>%
-  layer_dense(16, activation = "relu") %>%
-  layer_dense(1)
-model <- keras_model(inputs, outputs)
-
-keras::compile(
-  object = model,
-  optimizer = keras::optimizer_adam(lr = 0.001),
-  loss = "mse",
-  metrics = "mae"
+```{r warning=FALSE}
+# Faster XGBoost Tuning ---------------------------------------------------
+# Reduced tuning grid with most impactful parameters
+ctrl_fast <- trainControl(
+  method = "cv",
+  number = 5,  # Reduced from 10 folds
+  verboseIter = TRUE,
+  allowParallel = TRUE  # Enable parallel processing
 )
 
-history <- keras::fit(
-  object = model,
-  x = X_train_array,
-  y = y_train_array,
-  batch_size = 16,
-  epochs = 50,
-  validation_split = 0.2
+# Focused tuning grid
+xgb_grid_fast <- expand.grid(
+  nrounds = c(100, 150),          # Reduced options
+  max_depth = c(3, 4),            # drop down from 6 and 8
+  eta = c(0.01, 0.05),            # dropped down from 3 set options
+  gamma = c(0,1),                     # 0-1 to add regularization
+  colsample_bytree = 0.8,        # 
+  min_child_weight = 2,          # Increased from 1 to help prevent overfitting
+  subsample = 0.8                # Fixed
 )
 
-# 5. Verify
-print(summary(model))
-plot(history)
+# Train with parallel processing
+library(doParallel)
+cl <- makePSOCKcluster(4)  # Use 4 cores
+registerDoParallel(cl)
+
+xgb_fast <- train(
+  x = X_train,
+  y = y_train,
+  method = "xgbTree",
+  trControl = ctrl_fast,
+  tuneGrid = xgb_grid_fast,
+  verbosity = 0,                 # Suppress warnings
+  metric = "RMSE"
+)
+
+stopCluster(cl)
+
+# View results
+print(xgb_fast)
+plot(xgb_fast)
 ```
-
-
-
-### API Option: 
-```{r}
-# Clear session
-k_clear_session()
-
-# Define input shape explicitly
-inputs <- layer_input(shape = c(3, 26))  # timesteps × features
-
-# Network architecture
-outputs <- inputs %>%
-  layer_lstm(64, return_sequences = TRUE) %>%
-  layer_dropout(0.2) %>%
-  layer_lstm(32) %>%
-  layer_dropout(0.2) %>%
-  layer_dense(16, activation = "relu") %>%
-  layer_dense(1)
-
-# Create model
-
-model <- keras_model(inputs, outputs, name = "food_insecurity_model")
-# Check architecture
-summary(model)
-```
-
-### Train the Model:
 
 ```{r}
-# 3. COMPILE using the CORRECT syntax
-model %>% keras::compile(
-  optimizer = keras::optimizer_adam(learning_rate = 0.001),
-  loss = "mse",
-  metrics = "mae"
+
+# Faster XGBoost Tuning ---------------------------------------------------
+# Set up parallel processing
+library(doParallel)
+library(Metrics)
+cl <- makePSOCKcluster(4)  # Use 4 cores
+registerDoParallel(cl)
+
+# Reduced tuning grid with most impactful parameters
+ctrl_fast <- trainControl(
+  method = "cv",
+  number = 5,  # Reduced from 10 folds
+  verboseIter = TRUE,
+  allowParallel = TRUE,  # Enable parallel processing
+  savePredictions = "final"
 )
 
-# 4. TRAIN the model
-history <- model %>% keras::fit(
-  x = X_train_array,
-  y = y_train_array,
-  batch_size = 16,
-  epochs = 50,
-  validation_split = 0.2,
-  verbose = 1
+# Focused tuning grid
+xgb_grid_fast <- expand.grid(
+  nrounds = c(100, 150, 200, 300),
+  max_depth = c(4, 6, 8),
+  eta = c(0.05, 0.1, 0.15),
+  gamma = c(0,1),
+  colsample_bytree = 0.8,
+  min_child_weight = 2,
+  subsample = 0.8
 )
 
-# 5. Verify
-print(summary(model))
-plot(history)
+# Train the optimized model
+xgb_optimized <- train(
+  x = X_train,
+  y = y_train,
+  method = "xgbTree",
+  trControl = ctrl_fast,
+  tuneGrid = xgb_grid_fast,
+  verbosity = 0,
+  metric = "RMSE"
+)
+
+stopCluster(cl)
+
+# View tuning results
+print(xgb_optimized)
+plot(xgb_optimized)
+
+# Get best model parameters
+best_params <- xgb_optimized$bestTune
+
+# Prepare 2025 prediction data with feature engineering
+X_2025 <- df %>% 
+  filter(year == 2024) %>%
+  select(-c(year, fips, county.x, percent_food_insecure)) %>%
+  # Add any feature engineering used in training
+  mutate(
+    rural_urban = as.numeric(factor(rural_urban))
+  )
+
+# Make predictions using the optimized model
+predictions_2025 <- predict(xgb_optimized, newdata = X_2025)
+
+# Create comprehensive results dataframe
+results_2025 <- df %>%
+  filter(year == 2024) %>%
+  select(fips, county.x, percent_food_insecure) %>%  # Include current food insecurity
+  mutate(
+    pred_2025_food_insecure = predictions_2025,
+    predicted_change = pred_2025_food_insecure - percent_food_insecure,
+    risk_category = case_when(
+      pred_2025_food_insecure > quantile(predictions_2025, 0.75) ~ "High Risk",
+      pred_2025_food_insecure > quantile(predictions_2025, 0.5) ~ "Medium Risk",
+      TRUE ~ "Low Risk"
+    )
+  ) %>%
+  arrange(desc(pred_2025_food_insecure))  # Sort by highest predicted food insecurity
+
+# Save results with timestamps
+write.csv(
+  results_2025,
+  file = paste0("food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
+  row.names = FALSE
+)
+
+# Visualize top 10 high-risk counties
+library(ggplot2)
+results_2025 %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(county.x, -pred_2025_food_insecure), y = pred_2025_food_insecure)) +
+  geom_col(fill = "firebrick") +
+  labs(title = "Top 10 High-Risk Counties for 2025 Food Insecurity",
+       x = "County",
+       y = "Predicted Food Insecurity Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-### Evaluate Model Performance and Show Predictions:
 
 ```{r}
-# Evaluate on test set
-model %>% evaluate(X_test_array, y_test_array)
+library(caret)
+library(Metrics)
 
-# Make predictions
-predictions <- model %>% predict(X_test_array)
+test_predictions <- predict(xgb_optimized, newdata = X_test)
+actual_values <- y_test 
 
-# Create comparison dataframe
-results <- data.frame(
-  Actual = y_test_array,
-  Predicted = predictions[,1],
-  County = test %>% 
-    group_by(fips) %>% 
-    slice(1) %>% 
-    pull(fips) # Get county IDs
+metrics_table <- data.frame(
+  RMSE = RMSE(test_predictions, actual_values),
+  MAPE = mape(actual_values, test_predictions) * 100,
+  MSE = mean((test_predictions - actual_values)^2),
+  R2 = R2(test_predictions, actual_values)
 )
 
-# Calculate RMSE and MAE
-postResample(predictions, y_test_array)
-
-# Plot actual vs predicted
-ggplot(results, aes(x = Actual, y = Predicted)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(title = "Actual vs Predicted Food Insecurity",
-       x = "Actual Percent Food Insecure",
-       y = "Predicted Percent Food Insecure") +
-  theme_minimal()
+print(metrics_table)
 ```
+
+
+
+
+
+
 
