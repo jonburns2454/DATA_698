@@ -814,8 +814,33 @@ print(metrics_table)
 ```
 
 
+# Mapping XGBoosts Best Performing Model:
 
+```{r}
+# 3. Use this SAFE approach that avoids CRS transformations:
+library(sf)
+library(tigris)
+library(ggplot2)
 
+# Get counties in native projection (no transformation)
+ny_counties <- counties(state = "NY", cb = TRUE, year = 2021, class = "sf") %>% 
+  select(fips = GEOID, geometry)
+
+# Clean your data
+results_2025_clean <- results_2025 %>%
+  filter(fips != 36000) %>%
+  mutate(fips = as.character(fips))
+
+# Merge and plot
+ny_counties %>%
+  left_join(results_2025_clean, by = "fips") %>%
+  drop_na(pred_2025_food_insecure) %>%
+  ggplot() +
+  geom_sf(aes(fill = pred_2025_food_insecure), color = NA) +
+  scale_fill_viridis_c("Food Insecurity (%)", option = "inferno") +
+  labs(title = "2025 Predicted Food Insecurity by County") +
+  theme_void()
+```
 
 
 
