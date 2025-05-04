@@ -567,7 +567,7 @@ print(metrics_table)
 
 ## XGBoost 3:
 
-This XGBoost model will attempt to do four things. Make sure the lag variables are actually backward-looking by adjusting how they are set. Address overfitting by increasing regularization and increase early stopping. Lastly, add in more interaction terms
+This XGBoost model will attempt to do four things. Make sure the lag variables are actually backward-looking by adjusting how they are set. Address overfitting by increasing regularization and increase early stopping. Lastly, add in more interaction terms.
 
 ```{r}
 library(tidyverse)
@@ -836,7 +836,7 @@ ny_counties %>%
   drop_na(pred_2025_food_insecure) %>%
   ggplot() +
   geom_sf(aes(fill = pred_2025_food_insecure), color = NA) +
-  scale_fill_viridis_c("Food Insecurity (%)", option = "inferno") +
+  scale_fill_viridis_c("Food Insecurity (%)", option = "inferno", direction = -1) +
   labs(title = "2025 Predicted Food Insecurity by County") +
   theme_void()
 ```
