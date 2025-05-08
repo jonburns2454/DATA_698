@@ -21,8 +21,10 @@ library(psych)
 
 # Data Cleaning
 
+## Specify target columns
+
 ```{r}
-# Specify the sheets and columns you want
+# Taking out only the targeted variables needed for the analysis as there were much more availible in the health outcomes datasets. 
 
 columns_to_extract <- c("year","fips", "state", "county", "percent_food_insecure","percent_frequent_mental_distress",
                         "percent_uninsured_children", "percent_disconnected_youth", "spending_per_pupil","school_funding_adequacy", "high_school_graduation_rate", "median_household_income", "gender_pay_gap", "percent_enrolled_in_free_or_reduced_lunch", "percent_household_income_required_for_child_care_expenses", "percent_households_with_severe_cost_burden", "percent_rural", "percent_65_and_over", "percent_black","percent_not_proficient_in_english", "segregation_index", "percent_disconnected_youth", "food_environment_index", "teen_birth_rate", "percent_fair_or_poor_health", "percent_unemployed", "percent_children_in_single_parent_households", "percent_children_in_poverty", "percent_severe_housing_problems", "percent_completed_high_school","percent_completed_high_school", "percent_low_birthweight")
@@ -46,6 +48,8 @@ main_20 <- "https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/m
 supp_20 <- "https://raw.githubusercontent.com/jonburns2454/DATA_698/refs/heads/main/DATA/supp_20.csv"
 ```
 
+
+## Ensure naming conventions are all the same
 
 ```{r}
 clean_and_select <- function(file_path, columns_to_extract) {
@@ -74,7 +78,8 @@ s_20 <- clean_and_select(supp_20, columns_to_extract)
 
 ```
 
-## Fix Missing Total and join
+## Join in Main and Supplemental Data by Year
+
 ```{r}
 
 f_25 <- m_25 %>% 
@@ -102,13 +107,16 @@ f_20 <- m_20 %>%
   select(-state.y, -county.y)
 ```
 
+## Bind Yearly Data Together
+
 ```{r}
 final <- bind_rows(f_25, f_24, f_23, f_22, f_21, f_20)
 final_data_clean <- final %>%
   select(where(~ !any(is.na(.))))
 ```
 
-# Rural | Urban Category
+## Rural | Urban Category Creation
+
 ```{r}
 final <- final %>%
   mutate(
@@ -153,9 +161,6 @@ print(missing_table)
 describe(final, fast = T)
 ```
 
-
-
-
 ## Missingness Visualized
 
 ```{r}
@@ -163,14 +168,17 @@ ggplot(missing_table, aes(x = reorder(Column, -MissingPercentage), y = MissingPe
   geom_bar(stat = "identity", fill = "steelblue") +
   coord_flip() + 
   labs(
-    title = "Percentage of Missing Data by Column",
+    title = "Percentage of Missing Data by Variable",
     x = "Variable",
-    y = "Missingness"
+    y = "Missingness %"
   ) +
   theme_minimal()
 ```
 
 ##Numeric Distribution
+
+* Quick sapply function to look at histogram distributions for all of the numeric variables in the dataset
+* The target variable percent_food_insecure is normally distributed
 
 ```{r}
 library(ggplot2)
@@ -189,6 +197,7 @@ for (col in names(final_numeric)) {
 
 
 ## By Year:
+* Mean, median and standard deviation were calculated for each variable and then grouped by year.
 
 ```{r}
 library(dplyr)
@@ -201,6 +210,8 @@ print(yearly_summary)
 ```
 
 ## By County
+* Same thing for county level averages, median and sd for each var.
+
 ```{r}
 region_summary <- final %>%
   group_by(county.x, year) %>%
@@ -209,7 +220,10 @@ region_summary <- final %>%
 print(region_summary)
 ```
 
-
+## Yearly Line Graph of Food Insecurity
+* Despite this graph being messy, there is a point to it.
+* A trend appears, there is an overall shift down in food insecurity from 2023 -> 2024, followed by a shift upward in 2025, past where is was in the previous 4 years for most counties.
+* Additionally, the Bronx is an outlier for food insecurity showing 1. a much higher starting point in 2020, but also the increase over the five years is sharp.
 
 ```{r}
 library(ggplot2)
@@ -219,6 +233,8 @@ ggplot(region_summary, aes(x = year, y = percent_food_insecure_mean, color = cou
   labs(title = "Yearly Food Insecurity Across New York State Counties", x = "Year", y = "Food Insecurity") +
   theme_minimal()
 ```
+
+## Average trend in food insecurity across NYS only.
 
 ```{r}
 
@@ -237,6 +253,8 @@ ggplot(final, aes(x = county.x, y = percent_food_insecure, color = rural_urban))
   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
 ```
 
+## Saving out final csv for cross use in my python code (for LSTM) and the xGBoost.
+
 ```{r}
 final_csv <- write_csv(final, "C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 ```
@@ -245,30 +263,30 @@ final_csv <- write_csv(final, "C:\\Users\\jashb\\OneDrive\\Documents\\Masters Da
 # Model Testing:
 
 ## XGBoost 1:
+
+* This first XGBoost model aims to be a lighter weight model, only selecting 10 variables from the dataset. Additionally, I only created two lag features and recoded my categorical rural_urban column as numeric
 ```{r}
-# Load libraries
+
 library(tidyverse)
 library(xgboost)
 library(caret)
 
-# Read the CSV
 data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 
-# Filter relevant columns (adjust as needed)
 df <- data %>%
-  select(
-    year, fips, county.x, percent_food_insecure,
+  select(year, fips, county.x, percent_food_insecure,
     percent_unemployed, percent_children_in_poverty,
     median_household_income, percent_fair_or_poor_health,
     high_school_graduation_rate, rural_urban
   ) %>%
-  drop_na(percent_food_insecure)  # Remove rows with missing target
+  drop_na(percent_food_insecure)  #just making sure there are no na's left in for this XGBoost model
 ```
 
-### Create Lag Features and 
+### Create Lag Features and code rural_urban on
+* Using a standard 1 and 2 year lag variable for the entire model
 
 ```{r}
-# Create lag features (food insecurity from previous year)
+
 df <- df %>%
   arrange(fips, year) %>% 
   group_by(fips) %>%
@@ -278,7 +296,7 @@ df <- df %>%
   ) %>%
   ungroup()
 
-# Encode 'rural_urban' as numeric
+# recode rural_urban as numeric
 df <- df %>%
   mutate(rural_urban = as.factor(rural_urban),
          rural_urban = as.numeric(rural_urban))
@@ -290,7 +308,7 @@ df <- df %>%
 train <- df %>% filter(year < 2024)
 test <- df %>% filter(year == 2024)
 
-# Separate features (X) and target (y)
+# dropping out the non-important features, including the dependent variable
 X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure))
 y_train <- train$percent_food_insecure
 
@@ -302,14 +320,14 @@ y_test <- test$percent_food_insecure
 ### Experiment 1: Train Model
 
 ```{r}
-# Set up cross-validation
+# cross val
 ctrl <- trainControl(
   method = "cv",
   number = 10,
   verboseIter = TRUE
 )
 
-# Define XGBoost tuning grid
+# Standard xgboost tuning grid
 xgb_grid <- expand.grid(
   nrounds = 100,
   max_depth = 6,
@@ -320,7 +338,7 @@ xgb_grid <- expand.grid(
   subsample = 1
 )
 
-# Train the model
+
 xgb_model <- train(
   x = X_train,
   y = y_train,
@@ -330,26 +348,25 @@ xgb_model <- train(
   verbosity = 0
 )
 
-# Print model summary
+
 print(xgb_model)
 ```
 
 ### Apply Experiment 1 Model:
 ```{r}
-# Prepare 2024 data to predict 2025 (assuming 2025 features ≈ 2024)
-# (If 2025 features are unavailable, use 2024 as proxy)
-X_2025 <- df %>% 
+# predicting 2024 data
+X_2024 <- df %>% 
   filter(year == 2024) %>%
   select(-c(year, fips, county.x, percent_food_insecure))
 
-# Predict 2025 food insecurity
-predictions_2025 <- predict(xgb_model, newdata = X_2025)
+# Predicting 2024 food insecurity
+predictions_2024 <- predict(xgb_model, newdata = X_2024)
 
-# Combine with county names
+# bringing in county and fips codes 
 results <- df %>%
   filter(year == 2024) %>%
   select(fips, county.x) %>%
-  mutate(pred_2025_food_insecure = predictions_2025)
+  mutate(pred_2024_food_insecure = predictions_2024)
 
 # View predictions
 print(results)
@@ -358,18 +375,17 @@ print(results)
 ### Experiment 1: Predicted vs Actual Food Insecurity
 
 ```{r}
-# Predict 2024 (for validation)
+# Predict 2024 (for validPrediPredir)
 pred_2024 <- predict(xgb_model, newdata = X_test)
 
 # Calculate RMSE
 rmse <- sqrt(mean((pred_2024 - y_test)^2))
 print(paste("RMSE:", rmse))
 
-# Plot actual vs. predicted
 ggplot(data.frame(Actual = y_test, Predicted = pred_2024), aes(Actual, Predicted)) +
   geom_point() +
   geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(title = "Actual vs. Predicted Food Insecurity (2025)")
+  labs(title = "Actual vs. Predicted Food Insecurity (2024)")
 ```
 
 ### Experiment 1 Data Metrics Table
@@ -393,23 +409,26 @@ print(metrics_table)
 
 ## XGBoost 2:
 
+* XGBoost model 2 brings in a few different changes to the model, the lag variables are still created but this time the model is tuned to be faster.
+* By dropping the number of folds from 10 to 5 this should cut the number of boosted models ran for this experiment.
+* 
+
+### Pull in fresh set of data
 ```{r}
-# Load libraries
 library(tidyverse)
 library(xgboost)
 library(caret)
 
-# Read the CSV
+
 data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 
-# Filter relevant columns (adjust as needed)
+
 df <- data %>%
   select(where(~ all(!is.na(.)))) %>%
-  drop_na(percent_food_insecure)  # Remove rows with missing target
+  drop_na(percent_food_insecure)
 ```
 
 ```{r}
-# Create lag features (food insecurity from previous year)
 df <- df %>%
   arrange(fips, year) %>% 
   group_by(fips) %>%
@@ -419,7 +438,7 @@ df <- df %>%
   ) %>%
   ungroup()
 
-# Encode 'rural_urban' as numeric
+
 df <- df %>%
   mutate(rural_urban = as.factor(rural_urban),
          rural_urban = as.numeric(rural_urban))
@@ -438,8 +457,7 @@ y_test <- test$percent_food_insecure
 ```
 
 ```{r warning=FALSE}
-# Faster XGBoost Tuning ---------------------------------------------------
-# Reduced tuning grid with most impactful parameters
+# Faster XGBoost Tuning
 ctrl_fast <- trainControl(
   method = "cv",
   number = 5,  # Reduced from 10 folds
@@ -447,7 +465,7 @@ ctrl_fast <- trainControl(
   allowParallel = TRUE  # Enable parallel processing
 )
 
-# Focused tuning grid
+# Tuning grid set
 xgb_grid_fast <- expand.grid(
   nrounds = c(100, 150, 200, 300),          # Reduced options
   max_depth = c(4, 6, 8),            # Most useful range
@@ -458,9 +476,9 @@ xgb_grid_fast <- expand.grid(
   subsample = 0.8                # Fixed
 )
 
-# Train with parallel processing
+# Parallel processing to speed things up
 library(doParallel)
-cl <- makePSOCKcluster(4)  # Use 4 cores
+cl <- makePSOCKcluster(4)
 registerDoParallel(cl)
 
 xgb_fast <- train(
@@ -469,24 +487,22 @@ xgb_fast <- train(
   method = "xgbTree",
   trControl = ctrl_fast,
   tuneGrid = xgb_grid_fast,
-  verbosity = 0,                 # Suppress warnings
+  verbosity = 0,
   metric = "RMSE"
 )
 
 stopCluster(cl)
 
-# View results
+
 print(xgb_fast)
 plot(xgb_fast)
 ```
 
 
 ```{r}
-# Faster XGBoost Tuning ---------------------------------------------------
-# Set up parallel processing
 library(doParallel)
 library(Metrics)
-cl <- makePSOCKcluster(4)  # Use 4 cores
+cl <- makePSOCKcluster(4)
 registerDoParallel(cl)
 
 # Reduced tuning grid with most impactful parameters
@@ -498,7 +514,6 @@ ctrl_fast <- trainControl(
   savePredictions = "final"
 )
 
-# Focused tuning grid
 xgb_grid_fast <- expand.grid(
   nrounds = c(100, 150, 200, 300),
   max_depth = c(4, 6, 8),
@@ -522,7 +537,7 @@ xgb_optimized <- train(
 
 stopCluster(cl)
 
-# View tuning results
+
 print(xgb_optimized)
 plot(xgb_optimized)
 
@@ -530,7 +545,7 @@ plot(xgb_optimized)
 best_params <- xgb_optimized$bestTune
 
 # Prepare 2025 prediction data with feature engineering
-X_2025 <- df %>% 
+X_2024 <- df %>% 
   filter(year == 2024) %>%
   select(-c(year, fips, county.x, percent_food_insecure)) %>%
   # Add any feature engineering used in training
@@ -539,37 +554,37 @@ X_2025 <- df %>%
   )
 
 # Make predictions using the optimized model
-predictions_2025 <- predict(xgb_optimized, newdata = X_2025)
+predictions_2024 <- predict(xgb_optimized, newdata = X_2024)
 
 # Create comprehensive results dataframe
-results_2025 <- df %>%
+results_2024 <- df %>%
   filter(year == 2024) %>%
   select(fips, county.x, percent_food_insecure) %>%  # Include current food insecurity
   mutate(
-    pred_2025_food_insecure = predictions_2025,
-    predicted_change = pred_2025_food_insecure - percent_food_insecure,
+    pred_2024_food_insecure = predictions_2024,
+    predicted_change = pred_2024_food_insecure - percent_food_insecure,
     risk_category = case_when(
-      pred_2025_food_insecure > quantile(predictions_2025, 0.75) ~ "High Risk",
-      pred_2025_food_insecure > quantile(predictions_2025, 0.5) ~ "Medium Risk",
+      pred_2024_food_insecure > quantile(predictions_2024, 0.75) ~ "High Risk",
+      pred_2024_food_insecure > quantile(predictions_2024, 0.5) ~ "Medium Risk",
       TRUE ~ "Low Risk"
     )
   ) %>%
-  arrange(desc(pred_2025_food_insecure))  # Sort by highest predicted food insecurity
+  arrange(desc(pred_2024_food_insecure))  # Sort by highest predicted food insecurity
 
 # Save results with timestamps
 write.csv(
-  results_2025,
+  results_2024,
   file = paste0("food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
   row.names = FALSE
 )
 
 # Visualize top 10 high-risk counties
 library(ggplot2)
-results_2025 %>%
+results_2024 %>%
   head(10) %>%
-  ggplot(aes(x = reorder(county.x, -pred_2025_food_insecure), y = pred_2025_food_insecure)) +
+  ggplot(aes(x = reorder(county.x, -pred_2024_food_insecure), y = pred_2024_food_insecure)) +
   geom_col(fill = "firebrick") +
-  labs(title = "Top 10 High-Risk Counties for 2025 Food Insecurity",
+  labs(title = "Top 10 High-Risk Counties for 2024 Food Insecurity",
        x = "County",
        y = "Predicted Food Insecurity Rate") +
   theme_minimal() +
@@ -777,7 +792,7 @@ plot(xgb_optimized)
 best_params <- xgb_optimized$bestTune
 
 # Prepare 2025 prediction data with feature engineering
-X_2025 <- df %>% 
+X_2024 <- df %>% 
   filter(year == 2024) %>%
   select(-c(year, fips, county.x, percent_food_insecure)) %>%
   # Add any feature engineering used in training
@@ -786,37 +801,37 @@ X_2025 <- df %>%
   )
 
 # Make predictions using the optimized model
-predictions_2025 <- predict(xgb_optimized, newdata = X_2025)
+predictions_2024 <- predict(xgb_optimized, newdata = X_2024)
 
 # Create comprehensive results dataframe
-results_2025 <- df %>%
+results_2024 <- df %>%
   filter(year == 2024) %>%
   select(fips, county.x, percent_food_insecure) %>%  # Include current food insecurity
   mutate(
-    pred_2025_food_insecure = predictions_2025,
-    predicted_change = pred_2025_food_insecure - percent_food_insecure,
+    pred_2024_food_insecure = predictions_2024,
+    predicted_change = pred_2024_food_insecure - percent_food_insecure,
     risk_category = case_when(
-      pred_2025_food_insecure > quantile(predictions_2025, 0.75) ~ "High Risk",
-      pred_2025_food_insecure > quantile(predictions_2025, 0.5) ~ "Medium Risk",
+      pred_2024_food_insecure > quantile(predictions_2024, 0.75) ~ "High Risk",
+      pred_2024_food_insecure > quantile(predictions_2024, 0.5) ~ "Medium Risk",
       TRUE ~ "Low Risk"
     )
   ) %>%
-  arrange(desc(pred_2025_food_insecure))  # Sort by highest predicted food insecurity
+  arrange(desc(pred_2024_food_insecure))  # Sort by highest predicted food insecurity
 
 # Save results with timestamps
 write.csv(
-  results_2025,
+  results_2024,
   file = paste0("food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
   row.names = FALSE
 )
 
 # Visualize top 10 high-risk counties
 library(ggplot2)
-results_2025 %>%
+results_2024 %>%
   head(10) %>%
-  ggplot(aes(x = reorder(county.x, -pred_2025_food_insecure), y = pred_2025_food_insecure)) +
+  ggplot(aes(x = reorder(county.x, -pred_2024_food_insecure), y = pred_2024_food_insecure)) +
   geom_col(fill = "firebrick") +
-  labs(title = "Top 10 High-Risk Counties for 2025 Food Insecurity",
+  labs(title = "Top 10 High-Risk Counties for 2024 Food Insecurity",
        x = "County",
        y = "Predicted Food Insecurity Rate") +
   theme_minimal() +
@@ -854,33 +869,33 @@ ny_counties <- counties(state = "NY", cb = TRUE, year = 2021, class = "sf") %>%
   select(fips = GEOID, geometry)
 
 # Clean your data
-results_2025_clean <- results_2025 %>%
+results_2024_clean <- results_2024 %>%
   filter(fips != 36000) %>%
   mutate(fips = as.character(fips))
 
 # Merge and plot
 ny_counties %>%
-  left_join(results_2025_clean, by = "fips") %>%
-  drop_na(pred_2025_food_insecure) %>%
+  left_join(results_2024_clean, by = "fips") %>%
+  drop_na(pred_2024_food_insecure) %>%
   ggplot() +
-  geom_sf(aes(fill = pred_2025_food_insecure), color = NA) +
+  geom_sf(aes(fill = pred_2024_food_insecure), color = NA) +
   scale_fill_viridis_c("Food Insecurity (%)", option = "inferno", direction = -1) +
   labs(title = "New York State 2025 Predicted Food Insecurity by County") +
   theme_void()
 
 ny_map <- ny_counties %>%
-  left_join(results_2025_clean, by = "fips") %>%
-  drop_na(pred_2025_food_insecure) %>%
+  left_join(results_2024_clean, by = "fips") %>%
+  drop_na(pred_2024_food_insecure) %>%
   ggplot() +
-  geom_sf(aes(fill = pred_2025_food_insecure), color = NA) +
+  geom_sf(aes(fill = pred_2024_food_insecure), color = NA) +
   scale_fill_viridis_c(
     "Food Insecurity (%)", 
     option = "inferno", 
     direction = -1,
-    limits = c(0, max(results_2025_clean$pred_2025_food_insecure))
+    limits = c(0, max(results_2024_clean$pred_2024_food_insecure))
   ) +
   labs(
-    title = "New York State 2025 Predicted Food Insecurity by County",
+    title = "New York State 2024 Predicted Food Insecurity by County",
     caption = "Data: County Health Rankings"
   ) +
   theme_void() +
@@ -944,4 +959,13 @@ ggsave(
 ```
 
 
+## 
+
+```{r}
+ggplot(final, aes(x = county.x, y = percent_food_insecure, color = rural_urban)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(title = "County Level Comparison of Food Insecurity In New York State", x = "County", y = "Food Insecurity Percentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
+```
 
