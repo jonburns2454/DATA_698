@@ -19,7 +19,7 @@ library(psych)
 ```
 
 
-# Data Cleaning
+# Data Cleaning {.tabset}
 
 ## Specify target columns
 
@@ -153,7 +153,7 @@ missing_table <- missing_table[missing_table$MissingCount > 0, ]
 print(missing_table)
 ```
 
-# EDA
+# EDA {.tabset}
 
 ## Summary Statistics
 
@@ -260,9 +260,9 @@ final_csv <- write_csv(final, "C:\\Users\\jashb\\OneDrive\\Documents\\Masters Da
 ```
 
 
-# Model Testing:
+# Model Testing: {.tabset}
 
-## XGBoost 1:
+## XGBoost 1: {.tabset}
 
 * This first XGBoost model aims to be a lighter weight model, only selecting 10 variables from the dataset. Additionally, I only created two lag features and recoded my categorical rural_urban column as numeric
 ```{r}
@@ -407,13 +407,11 @@ metrics_table <- data.frame(
 print(metrics_table)
 ```
 
-## XGBoost 2:
+## XGBoost 2: {.tabset}
 
 * XGBoost model 2 brings in a few different changes to the model, the lag variables are still created but this time the model is tuned to be faster.
 * By dropping the number of folds from 10 to 5 this should cut the number of boosted models ran for this experiment.
-* 
 
-### Pull in fresh set of data
 ```{r}
 library(tidyverse)
 library(xgboost)
@@ -436,6 +434,7 @@ df <- df %>%
     food_insecure_lag1 = lag(percent_food_insecure, 1),  # Previous year
     food_insecure_lag2 = lag(percent_food_insecure, 2)   # Two years back
   ) %>%
+  select(-food_environment_index) %>% 
   ungroup()
 
 
@@ -448,7 +447,7 @@ df <- df %>%
 train <- df %>% filter(year < 2024)
 test <- df %>% filter(year == 2024)
 
-# Separate features (X) and target (y)
+
 X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure, state.x))
 y_train <- train$percent_food_insecure
 
@@ -457,7 +456,7 @@ y_test <- test$percent_food_insecure
 ```
 
 ```{r warning=FALSE}
-# Faster XGBoost Tuning
+
 ctrl_fast <- trainControl(
   method = "cv",
   number = 5,  # Reduced from 10 folds
@@ -470,10 +469,10 @@ xgb_grid_fast <- expand.grid(
   nrounds = c(100, 150, 200, 300),          # Reduced options
   max_depth = c(4, 6, 8),            # Most useful range
   eta = c(0.05, 0.1, .15),            # Optimal learning rates
-  gamma = 0,                     # Fixed for simplicity
-  colsample_bytree = 0.8,        # Fixed subsampling
-  min_child_weight = 1,          # Fixed
-  subsample = 0.8                # Fixed
+  gamma = 0,                     
+  colsample_bytree = 0.8,       
+  min_child_weight = 1,          
+  subsample = 0.8               
 )
 
 # Parallel processing to speed things up
@@ -505,7 +504,7 @@ library(Metrics)
 cl <- makePSOCKcluster(4)
 registerDoParallel(cl)
 
-# Reduced tuning grid with most impactful parameters
+
 ctrl_fast <- trainControl(
   method = "cv",
   number = 5,  # Reduced from 10 folds
@@ -524,7 +523,7 @@ xgb_grid_fast <- expand.grid(
   subsample = 0.8
 )
 
-# Train the optimized model
+# Train the  model
 xgb_optimized <- train(
   x = X_train,
   y = y_train,
@@ -541,25 +540,25 @@ stopCluster(cl)
 print(xgb_optimized)
 plot(xgb_optimized)
 
-# Get best model parameters
+
 best_params <- xgb_optimized$bestTune
 
-# Prepare 2025 prediction data with feature engineering
+
 X_2024 <- df %>% 
   filter(year == 2024) %>%
   select(-c(year, fips, county.x, percent_food_insecure)) %>%
-  # Add any feature engineering used in training
+ 
   mutate(
     rural_urban = as.numeric(factor(rural_urban))
   )
 
-# Make predictions using the optimized model
+
 predictions_2024 <- predict(xgb_optimized, newdata = X_2024)
 
-# Create comprehensive results dataframe
+
 results_2024 <- df %>%
   filter(year == 2024) %>%
-  select(fips, county.x, percent_food_insecure) %>%  # Include current food insecurity
+  select(fips, county.x, percent_food_insecure) %>%  
   mutate(
     pred_2024_food_insecure = predictions_2024,
     predicted_change = pred_2024_food_insecure - percent_food_insecure,
@@ -569,16 +568,16 @@ results_2024 <- df %>%
       TRUE ~ "Low Risk"
     )
   ) %>%
-  arrange(desc(pred_2024_food_insecure))  # Sort by highest predicted food insecurity
+  arrange(desc(pred_2024_food_insecure)) 
 
-# Save results with timestamps
+
 write.csv(
   results_2024,
   file = paste0("food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
   row.names = FALSE
 )
 
-# Visualize top 10 high-risk counties
+
 library(ggplot2)
 results_2024 %>%
   head(10) %>%
@@ -609,30 +608,72 @@ metrics_table <- data.frame(
 print(metrics_table)
 ```
 
-## XGBoost 3:
+```{r}
+library(caret)
 
-This XGBoost model will attempt to do four things. Make sure the lag variables are actually backward-looking by adjusting how they are set. Address overfitting by increasing regularization and increase early stopping. Lastly, add in more interaction terms.
+perm_imp <- varImp(
+  xgb_optimized,
+  scale = TRUE,  
+  type = "permutation",  
+  numPermutations = 30  
+)
+
+ggplot(perm_imp, aes(x = reorder(rownames(perm_imp), Overall), y = Overall)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(x = "Features", y = "Importance (Permutation)", 
+       title = "Permutation Importance") +
+  theme_minimal()
+
+
+perm_imp_plot <- ggplot(perm_imp, aes(x = reorder(rownames(perm_imp), Overall), y = Overall)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(x = "Features", y = "Importance (Permutation)", 
+       title = "Permutation Importance (XGBoost Experiment 3)") +
+  theme_minimal()
+
+ggsave(
+  filename = "permutation_importance.png",
+  plot = perm_imp_plot,
+  device = "png",
+  width = 8,         
+  height = 6,         
+  units = "in",       
+  dpi = 300,          
+  bg = "white"        
+)
+```
+
+## XGBoost 3: {.tabset}
+
+This XGBoost model will attempt to do four things:
+* Make sure the lag variables are actually backward-looking by adjusting how they are set. 
+* Address overfitting by increasing regularization 
+* increase early stopping. 
+* Lastly, add in more interaction terms.
+
+### Imputation Step:
 
 ```{r}
 library(tidyverse)
 library(mice)  # For advanced imputation
 
-# Load data
 data <- read.csv("C:\\Users\\jashb\\OneDrive\\Documents\\Masters Data Science\\Spring 2025\\DATA 698\\Masters Project\\final_data.csv")
 
-# 1. Calculate missingness percentages
+# This sapply function runs through the data and calculates the missing percentage across all columns
 missing_pct <- sapply(data, function(x) mean(is.na(x)) * 100)
 
-# 2. Identify columns to impute (≤25% missing) vs. drop (>25%)
+# 2. Rules I set (arbitrary) to decide what columns to keep and impute and which ones to drop
 cols_to_impute <- names(missing_pct[missing_pct <= 25 & missing_pct > 0])
 cols_to_drop <- names(missing_pct[missing_pct > 25])
 
-# 3. Drop columns with >25% missingness
+# 3. Drop columns with 25% or more missingness
 data_clean <- data %>% 
   select(-all_of(cols_to_drop))
 
-# 4. Impute remaining missing values (≤25%)
-# For numeric columns: median imputation
+# 4.
+# Numeric columns: median imputation
 num_cols <- data_clean %>% 
   select(where(is.numeric)) %>% 
   names() %>% 
@@ -641,7 +682,7 @@ num_cols <- data_clean %>%
 data_clean <- data_clean %>%
   mutate(across(all_of(num_cols), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
 
-# For categorical columns: mode imputation
+# Categorical Columns: mode imputation
 cat_cols <- data_clean %>% 
   select(where(is.character) | where(is.factor)) %>% 
   names() %>% 
@@ -661,25 +702,23 @@ data_final <- data_clean[row_missing_pct <= 25, ]
 
 ```
 
+### Combination variable creation
 ```{r}
-# Create lag features (food insecurity from previous year)
+
 df <- data_final %>%
   arrange(fips, year) %>% 
   group_by(fips) %>%
   mutate(
-    food_insecure_lag1 = lag(percent_food_insecure, 1),  # Previous year
-    food_insecure_lag2 = lag(percent_food_insecure, 2)   # Two years back
+    food_insecure_lag1 = lag(percent_food_insecure, 1), 
+    food_insecure_lag2 = lag(percent_food_insecure, 2)   
   ) %>%
+  select(-food_environment_index) %>% 
   ungroup()
 
-# Encode 'rural_urban' as numeric
+
 df <- df %>%
   mutate(rural_urban = as.factor(rural_urban),
          rural_urban = as.numeric(rural_urban),
-         food_risk_score = (
-      (percent_enrolled_in_free_or_reduced_lunch * 0.5) + 
-      (1 - food_environment_index * 0.5)
-    ),
     economic_stress = (
       percent_unemployed + 
       percent_children_in_poverty + 
@@ -687,11 +726,12 @@ df <- df %>%
     ) / 3)
 ```
 
+
+
 ```{r}
 train <- df %>% filter(year < 2024)
 test <- df %>% filter(year == 2024)
 
-# Separate features (X) and target (y)
 X_train <- train %>% select(-c(year, fips, county.x, percent_food_insecure, state.x))
 y_train <- train$percent_food_insecure
 
@@ -699,30 +739,31 @@ X_test <- test %>% select(-c(year, fips, county.x, percent_food_insecure, state.
 y_test <- test$percent_food_insecure
 ```
 
+
+
 ```{r warning=FALSE}
-# Faster XGBoost Tuning ---------------------------------------------------
-# Reduced tuning grid with most impactful parameters
+
 ctrl_fast <- trainControl(
   method = "cv",
-  number = 5,  # Reduced from 10 folds
+  number = 5,  # Reduce from 10 folds
   verboseIter = TRUE,
-  allowParallel = TRUE  # Enable parallel processing
+  allowParallel = TRUE  
 )
 
 # Focused tuning grid
 xgb_grid_fast <- expand.grid(
-  nrounds = c(100, 150),          # Reduced options
-  max_depth = c(3, 4),            # drop down from 6 and 8
-  eta = c(0.01, 0.05),            # dropped down from 3 set options
-  gamma = c(0,1),                     # 0-1 to add regularization
-  colsample_bytree = 0.8,        # 
+  nrounds = c(100, 150),          # Reduced amount of options for nrounds
+  max_depth = c(3, 4),            # drop down from 6 and 8 tree depth
+  eta = c(0.01, 0.05),            # dropped down from 3 set options to 2
+  gamma = c(0,1),                     # 0-1 to add regularization to help overfitting
+  colsample_bytree = 0.8,         
   min_child_weight = 2,          # Increased from 1 to help prevent overfitting
   subsample = 0.8                # Fixed
 )
 
-# Train with parallel processing
+
 library(doParallel)
-cl <- makePSOCKcluster(4)  # Use 4 cores
+cl <- makePSOCKcluster(4) 
 registerDoParallel(cl)
 
 xgb_fast <- train(
@@ -731,24 +772,22 @@ xgb_fast <- train(
   method = "xgbTree",
   trControl = ctrl_fast,
   tuneGrid = xgb_grid_fast,
-  verbosity = 0,                 # Suppress warnings
+  verbosity = 0,                 
   metric = "RMSE"
 )
 
 stopCluster(cl)
 
-# View results
+
 print(xgb_fast)
 plot(xgb_fast)
 ```
 
 ```{r}
 
-# Faster XGBoost Tuning ---------------------------------------------------
-# Set up parallel processing
 library(doParallel)
 library(Metrics)
-cl <- makePSOCKcluster(4)  # Use 4 cores
+cl <- makePSOCKcluster(4)  
 registerDoParallel(cl)
 
 # Reduced tuning grid with most impactful parameters
@@ -756,14 +795,14 @@ ctrl_fast <- trainControl(
   method = "cv",
   number = 5,  # Reduced from 10 folds
   verboseIter = TRUE,
-  allowParallel = TRUE,  # Enable parallel processing
+  allowParallel = TRUE,  
   savePredictions = "final"
 )
 
-# Focused tuning grid
+
 xgb_grid_fast <- expand.grid(
   nrounds = c(100, 150, 200, 300),
-  max_depth = c(4, 6, 8),
+  max_depth = c(4, 6, 8), # Back to 4,6,8 because 3,4 RMSE was not great
   eta = c(0.05, 0.1, 0.15),
   gamma = c(0,1),
   colsample_bytree = 0.8,
@@ -771,7 +810,7 @@ xgb_grid_fast <- expand.grid(
   subsample = 0.8
 )
 
-# Train the optimized model
+
 xgb_optimized <- train(
   x = X_train,
   y = y_train,
@@ -784,29 +823,26 @@ xgb_optimized <- train(
 
 stopCluster(cl)
 
-# View tuning results
+
 print(xgb_optimized)
 plot(xgb_optimized)
 
-# Get best model parameters
+
 best_params <- xgb_optimized$bestTune
 
-# Prepare 2025 prediction data with feature engineering
 X_2024 <- df %>% 
   filter(year == 2024) %>%
   select(-c(year, fips, county.x, percent_food_insecure)) %>%
-  # Add any feature engineering used in training
   mutate(
     rural_urban = as.numeric(factor(rural_urban))
   )
 
-# Make predictions using the optimized model
 predictions_2024 <- predict(xgb_optimized, newdata = X_2024)
 
-# Create comprehensive results dataframe
+
 results_2024 <- df %>%
   filter(year == 2024) %>%
-  select(fips, county.x, percent_food_insecure) %>%  # Include current food insecurity
+  select(fips, county.x, percent_food_insecure) %>%  
   mutate(
     pred_2024_food_insecure = predictions_2024,
     predicted_change = pred_2024_food_insecure - percent_food_insecure,
@@ -816,16 +852,16 @@ results_2024 <- df %>%
       TRUE ~ "Low Risk"
     )
   ) %>%
-  arrange(desc(pred_2024_food_insecure))  # Sort by highest predicted food insecurity
+  arrange(desc(pred_2024_food_insecure))
 
-# Save results with timestamps
+
 write.csv(
   results_2024,
   file = paste0("food_insecurity_predictions_", format(Sys.Date(), "%Y%m%d"), ".csv"),
   row.names = FALSE
 )
 
-# Visualize top 10 high-risk counties
+
 library(ggplot2)
 results_2024 %>%
   head(10) %>%
@@ -837,7 +873,7 @@ results_2024 %>%
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
-
+* The final values used for the model were nrounds = 300, max_depth = 4, eta = 0.05, gamma = 0, colsample_bytree = 0.8, min_child_weight = 2 and subsample = 0.8.
 
 ```{r}
 library(caret)
@@ -857,10 +893,10 @@ print(metrics_table)
 ```
 
 
-# Mapping XGBoosts Best Performing Model:
+### Geospacial graphing for the best performing XGBoost model:
 
 ```{r}
-# 3. Use this SAFE approach that avoids CRS transformations:
+# SF and Tigris are used to call in geospacial data for mapping purposes
 library(sf)
 library(tigris)
 
@@ -868,12 +904,12 @@ library(tigris)
 ny_counties <- counties(state = "NY", cb = TRUE, year = 2021, class = "sf") %>% 
   select(fips = GEOID, geometry)
 
-# Clean your data
+# Filtering out the NY Total Row
 results_2024_clean <- results_2024 %>%
   filter(fips != 36000) %>%
   mutate(fips = as.character(fips))
 
-# Merge and plot
+# Merge and plot the predictions with sf and tigris mapping data
 ny_counties %>%
   left_join(results_2024_clean, by = "fips") %>%
   drop_na(pred_2024_food_insecure) %>%
@@ -905,7 +941,7 @@ ny_map <- ny_counties %>%
     legend.title = element_text(size = 10)
   )
 
-# Save as PNG
+
 ggsave(
   filename = "ny_food_insecurity_2025.png",
   plot = ny_map,
@@ -926,9 +962,9 @@ library(caret)
 
 perm_imp <- varImp(
   xgb_optimized,
-  scale = TRUE,  # Scale to 0-100
-  type = "permutation",  # Alternative: "model" for native importance
-  numPermutations = 30  # Reduce for speed, increase for stability
+  scale = TRUE,  
+  type = "permutation", 
+  numPermutations = 30  
 )
 
 ggplot(perm_imp, aes(x = reorder(rownames(perm_imp), Overall), y = Overall)) +
@@ -956,16 +992,5 @@ ggsave(
   dpi = 300,          
   bg = "white"        
 )
-```
-
-
-## 
-
-```{r}
-ggplot(final, aes(x = county.x, y = percent_food_insecure, color = rural_urban)) +
-  geom_boxplot(fill = "steelblue") +
-  labs(title = "County Level Comparison of Food Insecurity In New York State", x = "County", y = "Food Insecurity Percentage") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
 ```
 
